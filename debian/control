@@ -1,12 +1,10 @@
 Source: dhcpdump
 Section: admin
-Priority: optional
 Maintainer: Boian Bonev <bbonev@ipacct.com>
 Build-Depends:
  debhelper-compat (= 13),
  libpcap-dev,
-Standards-Version: 4.6.2
-Rules-Requires-Root: no
+Standards-Version: 4.7.3
 Homepage: https://github.com/dhcpdump-org/dhcpdump
 Vcs-Browser: https://github.com/dhcpdump-org/dhcpdump
 Vcs-Git: https://github.com/dhcpdump-org/dhcpdump.git
