@@ -1,3 +1,15 @@
+dhcpdump (1.10-1) unstable; urgency=medium
+
+  * Fix copy-paste in d/copyright
+  * Update upstream repo to dhcpdump-org
+  * Remove Priority and R^3 from d/control
+  * Bump standards to 4.7.3
+  * Latest upstream 1.10
+    - Use Correct Destination IP
+  * Update d/watch to v5
+
+ -- Boian Bonev <bbonev@ipacct.com>  Thu, 19 Feb 2026 16:21:23 +0000
+
 dhcpdump (1.9-1) unstable; urgency=medium
 
   * Change upstream to a maintained fork
