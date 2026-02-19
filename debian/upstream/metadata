@@ -1,6 +1,6 @@
 ---
 Name: dhcpdump
-Bug-Database: https://github.com/bbonev/dhcpdump/issues
-Bug-Submit: https://github.com/bbonev/dhcpdump/issues/new
-Repository: https://github.com/bbonev/dhcpdump.git
-Repository-Browse: https://github.com/bbonev/dhcpdump/
+Bug-Database: https://github.com/dhcpdump-org/dhcpdump/issues
+Bug-Submit: https://github.com/dhcpdump-org/dhcpdump/issues/new
+Repository: https://github.com/dhcpdump-org/dhcpdump.git
+Repository-Browse: https://github.com/dhcpdump-org/dhcpdump/

@@ -7,9 +7,9 @@ Build-Depends:
  libpcap-dev,
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
-Homepage: https://github.com/bbonev/dhcpdump
-Vcs-Browser: https://github.com/bbonev/dhcpdump
-Vcs-Git: https://github.com/bbonev/dhcpdump.git
+Homepage: https://github.com/dhcpdump-org/dhcpdump
+Vcs-Browser: https://github.com/dhcpdump-org/dhcpdump
+Vcs-Git: https://github.com/dhcpdump-org/dhcpdump.git
 
 Package: dhcpdump
 Architecture: any

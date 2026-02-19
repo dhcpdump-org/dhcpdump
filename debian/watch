@@ -2,5 +2,5 @@ version=4
 
 opts="searchmode=plain, \
 	pgpsigurlmangle=s/releases\/download\/v([0-9.]+)\/dhcpdump-([0-9.]+)\.tar\.xz/releases\/download\/v$1\/dhcpdump-$1\.tar\.xz\.asc/" \
-	https://api.github.com/repos/bbonev/dhcpdump/releases \
-	https://github.com/bbonev/dhcpdump/releases/download/v\d[\.\d]*/dhcpdump-@ANY_VERSION@.tar.xz
+	https://api.github.com/repos/dhcpdump-org/dhcpdump/releases \
+	https://github.com/dhcpdump-org/dhcpdump/releases/download/v\d[\.\d]*/dhcpdump-@ANY_VERSION@.tar.xz
