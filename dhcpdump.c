@@ -302,14 +302,20 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 	j=236;
 	j+=4; // cookie
 	while (j<data_len&&data[j]!=255) {
+		if (data[j]==0) { // pad option, carries neither a length nor a value byte
+			printf("OPTION: %3d (  0) %-26s\n",data[j],dhcp_options[data[j]]);
+			j++;
+			continue;
+		}
+		if (j+2>data_len||j+2+data[j+1]>data_len) { // length byte and value bytes must be captured
+			printf("OPTION: %3d       *malformed - truncated option*\n",data[j]);
+			break;
+		}
 		printf("OPTION: %3d (%3d) %-26s",data[j],data[j+1],dhcp_options[data[j]]);
 
 		switch (data[j]) {
 			default:
 				printHexString(data+j+2,data[j+1],8);
-				break;
-
-			case 0: // pad
 				break;
 
 			case 1: // Subnetmask
@@ -319,7 +325,10 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 			case 50: // Requested IP address
 			case 54: // Server identifier
 			case 118: // Subnet selection option
-				printIPaddress(data+j+2);
+				if (data[j+1]<4)
+					printf("*malformed - too short*");
+				else
+					printIPaddress(data+j+2);
 				break;
 
 			case 12: // Hostname
@@ -410,7 +419,10 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 			case 22: // Maximum datagram reassembly size
 			case 26: // Interface MTU
 			case 57: // Maximum DHCP message size
-				print16bits(data+j+2);
+				if (data[j+1]<2)
+					printf("*malformed - too short*");
+				else
+					print16bits(data+j+2);
 				break;
 
 			case 19: // IP forwarding enabled/disable
@@ -421,16 +433,25 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 			case 31: // Perform router discovery
 			case 34: // Trailer encapsulation
 			case 39: // TCP keepalive garbage
-				printf("%d (%s)",data[j+2],data[j+2]>strcountof(enabledisable)?"*unknown*":enabledisable[data[j+2]]);
+				if (data[j+1]<1)
+					printf("*malformed - too short*");
+				else
+					printf("%d (%s)",data[j+2],data[j+2]>strcountof(enabledisable)?"*unknown*":enabledisable[data[j+2]]);
 				break;
 
 			case 23: // Default IP TTL
-				printTime8(data+j+2);
+				if (data[j+1]<1)
+					printf("*malformed - too short*");
+				else
+					printTime8(data+j+2);
 				break;
 
 			case 37: // TCP default TTL
 			case 145: // FORCERENEW_NONCE_CAPABLE
-				print8bits(data+j+2);
+				if (data[j+1]<1)
+					printf("*malformed - too short*");
+				else
+					print8bits(data+j+2);
 				break;
 
 			case 43: // Vendor specific info
@@ -439,7 +460,10 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 				break;
 
 			case 46: // NetBIOS over TCP/IP node type
-				printf("%d (%s)",data[j+2],data[j+2]>strcountof(netbios_node_type)?"*unknown*":netbios_node_type[data[j+2]]);
+				if (data[j+1]<1)
+					printf("*malformed - too short*");
+				else
+					printf("%d (%s)",data[j+2],data[j+2]>strcountof(netbios_node_type)?"*unknown*":netbios_node_type[data[j+2]]);
 				break;
 
 			case 2: // Time offset
@@ -456,19 +480,31 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 			case 154: // query-start-time
 			case 155: // query-end-time
 			case 211: // reboot-time
-				printTime32(data+j+2);
+				if (data[j+1]<4)
+					printf("*malformed - too short*");
+				else
+					printTime32(data+j+2);
 				break;
 
 			case 36: // Ethernet encapsulation
-				printf("%d (%s)",data[j+2],data[j+2]>strcountof(ethernet_encapsulation)?"*unknown*":ethernet_encapsulation[data[j+2]]);
+				if (data[j+1]<1)
+					printf("*malformed - too short*");
+				else
+					printf("%d (%s)",data[j+2],data[j+2]>strcountof(ethernet_encapsulation)?"*unknown*":ethernet_encapsulation[data[j+2]]);
 				break;
 
 			case 52: // Option overload
-				printf("%d (%s)",data[j+2],data[j+2]>strcountof(option_overload)?"*unknown*":option_overload[data[j+2]]);
+				if (data[j+1]<1)
+					printf("*malformed - too short*");
+				else
+					printf("%d (%s)",data[j+2],data[j+2]>strcountof(option_overload)?"*unknown*":option_overload[data[j+2]]);
 				break;
 
 			case 53: // DHCP message type
-				printf("%d (%s)",data[j+2],data[j+2]>strcountof(dhcp_message_types)?"*unknown*":dhcp_message_types[data[j+2]]);
+				if (data[j+1]<1)
+					printf("*malformed - too short*");
+				else
+					printf("%d (%s)",data[j+2],data[j+2]>strcountof(dhcp_message_types)?"*unknown*":dhcp_message_types[data[j+2]]);
 				break;
 
 			case 55: // Parameter Request List
@@ -503,6 +539,10 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 
 			case 82: // Relay Agent Information
 				for (i=j+2;i<j+data[j+1]+2;) {
+					if (i+2>j+data[j+1]+2) { // suboption code and length bytes must be present
+						printf("\n%-17s *malformed - truncated*"," ");
+						break;
+					}
 					printf("\n%-17s %-10s "," ",data[i]>strcountof(relayagent_suboptions)?"*unknown*":relayagent_suboptions[data[i]]);
 					if (i+data[i+1]+2>j+data[j+1]+2) {
 						printf("*malformed - too large*\n");
@@ -514,15 +554,24 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 				break;
 
 			case 93: // Client System Architecture
-				printf("%d (%s)",data[j+3],data[j+3]>strcountof(client_architecture_names)?"*unknown*":client_architecture_names[data[j+3]]);
+				if (data[j+1]<2)
+					printf("*malformed - too short*");
+				else
+					printf("%d (%s)",data[j+3],data[j+3]>strcountof(client_architecture_names)?"*unknown*":client_architecture_names[data[j+3]]);
 				break;
 
 			case 94: // Client Network Interface Identifier
-				printf("%u (Rev %d.%d)",(data[j+3]<<8|data[j+4]),data[j+3],data[j+4]);
+				if (data[j+1]<3)
+					printf("*malformed - too short*");
+				else
+					printf("%u (Rev %d.%d)",(data[j+3]<<8|data[j+4]),data[j+3],data[j+4]);
 				break;
 
 			case 116: // Auto-Configure
-				printf("%d (%s)",data[j+2],data[j+2]>strcountof(auto_configure)?"*unknown*":auto_configure[data[j+2]]);
+				if (data[j+1]<1)
+					printf("*malformed - too short*");
+				else
+					printf("%d (%s)",data[j+2],data[j+2]>strcountof(auto_configure)?"*unknown*":auto_configure[data[j+2]]);
 				break;
 
 			case 121: // Classless static route
@@ -533,10 +582,7 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 		}
 		printf("\n");
 
-		if (data[j]==0) // padding
-			j++;
-		else
-			j+=data[j+1]+2;
+		j+=data[j+1]+2;
 	}
 
 	printf("--------------------------------------------------------------------------------\n\n");
