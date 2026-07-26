@@ -296,8 +296,8 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 	printf("CHADDR: ");
 	printHexColon(data+28,16);
 	printf("\n");
-	printf(" SNAME: %s.\n",data+44);
-	printf(" FNAME: %s.\n",data+108);
+	printf(" SNAME: %.64s.\n",data+44); // sname is a fixed 64 byte field, may lack a NUL
+	printf(" FNAME: %.128s.\n",data+108); // file is a fixed 128 byte field, may lack a NUL
 
 	j=236;
 	j+=4; // cookie
