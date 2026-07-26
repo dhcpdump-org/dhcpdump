@@ -265,10 +265,15 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 	if (data_len==0)
 		return 0;
 
+	if (data_len<236) { // the fixed BOOTP header (op..file) is 236 bytes
+		fprintf(stderr,"Ignored too short DHCP packet: %d bytes\n",data_len);
+		return 0;
+	}
+
 	printf("  TIME: %s\n",timestamp);
 	printf("    IP: %s (%s) > %s (%s)\n",ip_orig,mac_orig,ip_dest,mac_dest);
-	printf("    OP: %d (%s)\n",data[0],operands[data[0]]);
-	printf(" HTYPE: %d (%s)\n",data[1],htypes[data[1]]);
+	printf("    OP: %d (%s)\n",data[0],data[0]>=strcountof(operands)?"*unknown*":operands[data[0]]);
+	printf(" HTYPE: %d (%s)\n",data[1],data[1]>=strcountof(htypes)?"*unknown*":htypes[data[1]]);
 	printf("  HLEN: %d\n",data[2]);
 	printf("  HOPS: %d\n",data[3]);
 	printf("   XID: %02x%02x%02x%02x\n",data[4],data[5],data[6],data[7]);
