@@ -1,14 +1,9 @@
 // {{{ includes
 
-#include <err.h>
-#include <pcap.h>
-#include <time.h>
 #include <ctype.h>
-#include <regex.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
-#include <sys/time.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -17,8 +12,8 @@
 #include <net/if_arp.h>
 #include <netinet/if_ether.h>
 
-#include "version.h"
 #include "dhcp_options.h"
+#include "dhcpdump.h"
 
 // }}}
 
@@ -53,76 +48,31 @@
 
 // }}}
 
-// {{{ globals
-
-char timestamp[40]; // timestamp on header
-char mac_orig[40]; // mac address of origin
-char mac_dest[40]; // mac address of destination
-char ip_orig[40]; // ip address of origin
-char ip_dest[40]; // ip address of destination
-int max_data_len; // maximum size of a packet
-int dohexdump=0; // dump whole packet contents for debug
-
-int tcpdump_style=-1;
-char errbuf[PCAP_ERRBUF_SIZE];
-char *hmask=NULL;
-regex_t preg;
-
-// }}}
-
-static inline int usage(const char *me) { // {{{
-	printf("dhcpdump "VERSION"\n");
-	printf("  Usage:\n");
-	printf("    %s -i <interface> [-h <macaddress>] [-H]\n",me);
-	printf("    %s -r <pcapfile>  [-h <macaddress>] [-H]\n",me);
-	printf("  Options:\n");
-	printf("    -h regexp filter by <macaddress>\n");
-	printf("    -H prints whole packet hex dump\n");
-	return 0;
-} // }}}
-
-static inline int check_ch(uint8_t *data,int data_len) { // {{{ check for matching CHADDR (Peter Apian-Bennewitz <apian@ise.fhg.de>)
-	char ch_ip[50];
-
-	if (data_len<44) // CHADDR spans data[28..43], so 44 bytes must be present
-		return 0;
-
-	sprintf(ch_ip,
-		"%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:"
-		"%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x\n",
-		data[28],data[29],data[30],data[31],
-		data[32],data[33],data[34],data[35],
-		data[36],data[37],data[38],data[39],
-		data[40],data[41],data[42],data[43]);
-
-	return regexec(&preg,ch_ip,0,NULL,0);
-} // }}}
-
-static inline void printIPaddress(uint8_t *data) { // {{{ print the data as an IP address
+static inline void printIPaddress(const uint8_t *data) { // {{{ print the data as an IP address
 	printf("%u.%u.%u.%u",data[0],data[1],data[2],data[3]);
 } // }}}
 
-static inline void printIPaddressAddress(uint8_t *data) { // {{{ print the data as an IP address and an IP address
+static inline void printIPaddressAddress(const uint8_t *data) { // {{{ print the data as an IP address and an IP address
 	printf("%u.%u.%u.%u %u.%u.%u.%u",
 		data[0],data[1],data[2],data[3],
 		data[4],data[5],data[6],data[7]);
 } // }}}
 
-static inline void printIPaddressMask(uint8_t *data) { // {{{ print the data as an IP address and mask
+static inline void printIPaddressMask(const uint8_t *data) { // {{{ print the data as an IP address and mask
 	printf("%u.%u.%u.%u/%u.%u.%u.%u",
 		data[0],data[1],data[2],data[3],
 		data[4],data[5],data[6],data[7]);
 } // }}}
 
-static inline void print8bits(uint8_t *data) { // {{{ prints a value of 8 bits (1 byte)
+static inline void print8bits(const uint8_t *data) { // {{{ prints a value of 8 bits (1 byte)
 	printf("%u",data[0]);
 } // }}}
 
-static inline void print16bits(uint8_t *data) { // {{{ prints a value of 16 bits (2 bytes)
+static inline void print16bits(const uint8_t *data) { // {{{ prints a value of 16 bits (2 bytes)
 	printf("%u",(data[0]<<8)|data[1]);
 } // }}}
 
-static inline void printTime8(uint8_t *data) { // {{{ print the data as a 8bits time-value
+static inline void printTime8(const uint8_t *data) { // {{{ print the data as a 8bits time-value
 	unsigned t=data[0];
 
 	printf("%u (",t);
@@ -147,7 +97,7 @@ static inline void printTime8(uint8_t *data) { // {{{ print the data as a 8bits 
 	printf(")");
 } // }}}
 
-static inline void printTime32(uint8_t *data) { // {{{ print the data as a 32bits time-value
+static inline void printTime32(const uint8_t *data) { // {{{ print the data as a 32bits time-value
 	unsigned t=(data[0]<<24)|(data[1]<<16)|(data[2]<<8)|data[3];
 
 	printf("%u (",t);
@@ -172,7 +122,7 @@ static inline void printTime32(uint8_t *data) { // {{{ print the data as a 32bit
 	printf(")");
 } // }}}
 
-static inline void printHexString(uint8_t *data,int len,int clen) { // {{{ print the data as a hex-list, with the translation into ascii behind it
+static inline void printHexString(const uint8_t *data,int len,int clen) { // {{{ print the data as a hex-list, with the translation into ascii behind it
 	int i,j,k;
 
 	for (i=0;i<=len/clen;i++) {
@@ -196,7 +146,7 @@ static inline void printHexString(uint8_t *data,int len,int clen) { // {{{ print
 	}
 } // }}}
 
-static inline void printHex(uint8_t *data,int len) { // {{{ print the data as a hex-list, without the translation into ascii behind it
+static inline void printHex(const uint8_t *data,int len) { // {{{ print the data as a hex-list, without the translation into ascii behind it
 	int i,j;
 
 	for (i=0;i<=len/8;i++) {
@@ -210,7 +160,7 @@ static inline void printHex(uint8_t *data,int len) { // {{{ print the data as a 
 	}
 } // }}}
 
-static inline void printHexColon(uint8_t *data,int len) { // {{{ print the data as a hex-list separated by colons
+static inline void printHexColon(const uint8_t *data,int len) { // {{{ print the data as a hex-list separated by colons
 	int i;
 
 	for (i=0;i<len;i++) {
@@ -220,14 +170,14 @@ static inline void printHexColon(uint8_t *data,int len) { // {{{ print the data 
 	}
 } // }}}
 
-static inline void printReqParmList(uint8_t *data,int len) { // {{{ print the list of requested parameters
+static inline void printReqParmList(const uint8_t *data,int len) { // {{{ print the list of requested parameters
 	int i;
 
 	for (i=0;i<len;i++)
 		printf("%-3d (%s)%s%*s",data[i],dhcp_options[data[i]],(i+1<len)?"\n":"",(i+1<len)?44:0,"");
 } // }}}
 
-static inline void printIPaddressCompactMaskAddress(uint8_t *data,int len) { // {{{ print the data as series of IP address and masks
+static inline void printIPaddressCompactMaskAddress(const uint8_t *data,int len) { // {{{ print the data as series of IP address and masks
 	int i,j,isok=1;
 
 	if (len<5)
@@ -258,20 +208,20 @@ static inline void printIPaddressCompactMaskAddress(uint8_t *data,int len) { // 
 	}
 } // }}}
 
-static inline int printdata(uint8_t *data,int data_len) { // {{{ print the header and the options.
+static void print_payload(const uint8_t *data,int data_len,const char *ts,const char *sip,const char *smac,const char *dip,const char *dmac) { // {{{ print the header and the options
 	char buf[LARGESTRING];
 	int i,j;
 
 	if (data_len==0)
-		return 0;
+		return;
 
 	if (data_len<236) { // the fixed BOOTP header (op..file) is 236 bytes
 		fprintf(stderr,"Ignored too short DHCP packet: %d bytes\n",data_len);
-		return 0;
+		return;
 	}
 
-	printf("  TIME: %s\n",timestamp);
-	printf("    IP: %s (%s) > %s (%s)\n",ip_orig,mac_orig,ip_dest,mac_dest);
+	printf("  TIME: %s\n",ts);
+	printf("    IP: %s (%s) > %s (%s)\n",sip,smac,dip,dmac);
 	printf("    OP: %d (%s)\n",data[0],data[0]>=strcountof(operands)?"*unknown*":operands[data[0]]);
 	printf(" HTYPE: %d (%s)\n",data[1],data[1]>=strcountof(htypes)?"*unknown*":htypes[data[1]]);
 	printf("  HLEN: %d\n",data[2]);
@@ -587,11 +537,9 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 
 	printf("--------------------------------------------------------------------------------\n\n");
 	fflush(stdout);
-
-	return 0;
 } // }}}
 
-static inline void hexdump(const uint8_t *buf,int len) { // {{{
+void dhcp_hexdump(const uint8_t *buf,int len) { // {{{ full-frame hex dump (the -H output)
 	int i;
 	char hexb[16*3+2]="";
 	char ascb[16+2]="";
@@ -611,32 +559,25 @@ static inline void hexdump(const uint8_t *buf,int len) { // {{{
 	}
 } // }}}
 
-static void pcap_callback(uint8_t *user __attribute__((unused)),const struct pcap_pkthdr *h,const uint8_t *sp) { // {{{
-	struct ether_header *eh;
-	struct udphdr *udp;
-	struct timeval tp;
+int dhcp_decap(const uint8_t *sp,unsigned caplen,struct dhcp_frame *f,FILE *diag) { // {{{ Ethernet/VLAN/IPv4/UDP -> DHCP payload
+	const struct ether_header *eh;
+	const struct udphdr *udp;
+	const uint16_t *et;
 	unsigned offset=0;
-	uint16_t vlans[20]; // holds a 12 bit VLAN ID, must be wider than 8 bits
-	unsigned vlanc=0;
-	char vlant[20];
-	struct ip *ip;
-	uint16_t *et;
+	const struct ip *ip;
 	unsigned ihl;
 	unsigned plen;
-	unsigned i;
 
-	if (dohexdump) {
-		hexdump(sp,h->caplen);
-		printf("\n");
+	f->nvlan=0;
+
+	if (caplen<ETHER_HDR_LEN) {
+		if (diag)
+			fprintf(diag,"Ignored too short ethernet packet: %d bytes\n",caplen);
+		return 0;
 	}
 
-	if (h->caplen<ETHER_HDR_LEN) {
-		fprintf(stderr,"Ignored too short ethernet packet: %d bytes\n",h->caplen);
-		return;
-	}
-
-	eh=(struct ether_header *)(sp+offset);
-	et=(uint16_t *)(sp+offset+sizeof *eh);
+	eh=(const struct ether_header *)(sp+offset);
+	et=(const uint16_t *)(sp+offset+sizeof *eh);
 	et--;
 
 	// Check for IPv4 packets
@@ -647,43 +588,48 @@ nexthdr:
 			break;
 		case ETH_P_8021Q:
 		case ETH_P_8021AD:
-			if (h->caplen<ETHER_HDR_LEN+offset+4) {
-				fprintf(stderr,"Ignored too short ethernet+vlan packet: %d bytes\n",h->caplen);
-				return;
+			if (caplen<ETHER_HDR_LEN+offset+4) {
+				if (diag)
+					fprintf(diag,"Ignored too short ethernet+vlan packet: %d bytes\n",caplen);
+				return 0;
 			}
-			if (vlanc>=sizeof vlant/sizeof *vlant) {
-				fprintf(stderr,"Ignored too many vlans in packet: %d bytes\n",h->caplen);
-				return;
+			if (f->nvlan>=DHCP_MAX_VLAN) {
+				if (diag)
+					fprintf(diag,"Ignored too many vlans in packet: %d bytes\n",caplen);
+				return 0;
 			}
-			vlant[vlanc]=ntohs(*et)==ETH_P_8021Q?'C':'S';
-			vlans[vlanc]=ntohs(et[1])&0xfff;
-			vlanc++;
+			f->vlan[f->nvlan].type=ntohs(*et)==ETH_P_8021Q?'C':'S';
+			f->vlan[f->nvlan].id=ntohs(et[1])&0xfff;
+			f->nvlan++;
 			offset+=4;
 			et+=2;
 			goto nexthdr;
 		default:
-			fprintf(stderr,"Ignored non IPv4 packet: 0x%x\n",ntohs(eh->ether_type));
-			return;
+			if (diag)
+				fprintf(diag,"Ignored non IPv4 packet: 0x%x\n",ntohs(eh->ether_type));
+			return 0;
 	}
 
 	// Check for length
-	if (h->caplen<offset+sizeof(struct ip)) {
-		fprintf(stderr,"Ignored too short IPv4 packet: %d bytes\n",h->caplen);
-		return;
+	if (caplen<offset+sizeof(struct ip)) {
+		if (diag)
+			fprintf(diag,"Ignored too short IPv4 packet: %d bytes\n",caplen);
+		return 0;
 	}
 
-	ip=(struct ip *)(sp+offset);
+	ip=(const struct ip *)(sp+offset);
 	ihl=ip->ip_hl;
 	if (ihl<5)
 		ihl=5;
 	offset+=ihl*4;
 
-	if (h->caplen<offset+sizeof(struct udphdr)) {
-		fprintf(stderr,"Ignored too short UDP packet: %d bytes\n",h->caplen);
-		return;
+	if (caplen<offset+sizeof(struct udphdr)) {
+		if (diag)
+			fprintf(diag,"Ignored too short UDP packet: %d bytes\n",caplen);
+		return 0;
 	}
 
-	udp=(struct udphdr *)(sp+offset);
+	udp=(const struct udphdr *)(sp+offset);
 	offset+=sizeof(struct udphdr);
 
 	// Length of the DHCP payload: trust neither the UDP length field nor the
@@ -694,104 +640,36 @@ nexthdr:
 		plen=0;
 	else
 		plen-=sizeof(struct udphdr);
-	if (plen>h->caplen-offset)
-		plen=h->caplen-offset;
+	if (plen>caplen-offset)
+		plen=caplen-offset;
 
-	gettimeofday(&tp,NULL);
-	strftime(timestamp,sizeof timestamp,"%Y-%m-%d %H:%M:%S.",localtime(&(tp.tv_sec)));
-	sprintf(timestamp+strlen(timestamp),"%03ld",tp.tv_usec/1000);
+	memcpy(f->smac,eh->ether_shost,6);
+	memcpy(f->dmac,eh->ether_dhost,6);
+	f->srcip=ip->ip_src.s_addr;
+	f->dstip=ip->ip_dst.s_addr;
+	f->payload=sp+offset;
+	f->plen=plen;
 
-	sprintf(mac_orig,"%02x:%02x:%02x:%02x:%02x:%02x",
-		eh->ether_shost[0],eh->ether_shost[1],eh->ether_shost[2],
-		eh->ether_shost[3],eh->ether_shost[4],eh->ether_shost[5]);
-	sprintf(mac_dest,"%02x:%02x:%02x:%02x:%02x:%02x",
-		eh->ether_dhost[0],eh->ether_dhost[1],eh->ether_dhost[2],
-		eh->ether_dhost[3],eh->ether_dhost[4],eh->ether_dhost[5]);
-
-	ip_orig[0]=0;
-	ip_dest[0]=0;
-	inet_ntop(AF_INET,&ip->ip_src,ip_orig,sizeof ip_orig);
-	inet_ntop(AF_INET,&ip->ip_dst,ip_dest,sizeof ip_dest);
-
-	if (hmask&&check_ch((uint8_t *)(sp+offset),plen))
-		return;
-
-	if (vlanc)
-		printf("  VLAN:");
-	for (i=0;i<vlanc;i++)
-		printf(" %c:%04u",vlant[i],vlans[i]);
-	if (vlanc)
-		printf("\n");
-	printdata((uint8_t *)(sp+offset),plen);
+	return 1;
 } // }}}
 
-int main(int argc,char **argv) { // {{{
-	struct bpf_program fp;
-	char *interface=NULL;
-	char *pcapfile=NULL;
-	pcap_t *cap;
+void dhcp_print(const struct dhcp_frame *f,const char *ts) { // {{{ classic verbose dump of a decapsulated frame
+	char sip[40],dip[40],smac[40],dmac[40];
 	int i;
 
-	for (i=1;i<argc;i++) {
-		char **dst=NULL;
+	if (f->nvlan)
+		printf("  VLAN:");
+	for (i=0;i<f->nvlan;i++)
+		printf(" %c:%04u",f->vlan[i].type,f->vlan[i].id);
+	if (f->nvlan)
+		printf("\n");
 
-		if (argv[i]==NULL||argv[i][0]!='-')
-			break;
-		switch (argv[i][1]) {
-			case 'H':
-				dohexdump=1;
-				break;
-			case 'h':
-				dst=&hmask;
-				break;
-			case 'i':
-				dst=&interface;
-				break;
-			case 'r':
-				dst=&pcapfile;
-				break;
-			default:
-				fprintf(stderr,"%s: %c: unknown option\n",argv[0],argv[i][1]);
-				return usage(argv[0]);
-		}
-		if (dst) { // -h/-i/-r consume the following argument, which must exist
-			if (i+1>=argc) {
-				fprintf(stderr,"%s: -%c: option requires an argument\n",argv[0],argv[i][1]);
-				return usage(argv[0]);
-			}
-			*dst=argv[++i];
-		}
-	}
+	inet_ntop(AF_INET,&f->srcip,sip,sizeof sip);
+	inet_ntop(AF_INET,&f->dstip,dip,sizeof dip);
+	snprintf(smac,sizeof smac,"%02x:%02x:%02x:%02x:%02x:%02x",
+		f->smac[0],f->smac[1],f->smac[2],f->smac[3],f->smac[4],f->smac[5]);
+	snprintf(dmac,sizeof dmac,"%02x:%02x:%02x:%02x:%02x:%02x",
+		f->dmac[0],f->dmac[1],f->dmac[2],f->dmac[3],f->dmac[4],f->dmac[5]);
 
-	if (interface==NULL&&pcapfile==NULL)
-		return usage(argv[0]);
-	if (interface!=NULL&&pcapfile!=NULL)
-		errx(1,"Can not capture from interface \"%s\" and read from file \"%s\" at the same time",interface,pcapfile);
-
-	if (hmask) {
-		int rc=regcomp(&preg,hmask,REG_EXTENDED|REG_ICASE|REG_NOSUB);
-
-		if (rc) {
-			char rerr[LARGESTRING];
-
-			regerror(rc,&preg,rerr,sizeof rerr);
-			errx(1,"Invalid -h regexp \"%s\": %s",hmask,rerr);
-		}
-	}
-
-	if (interface!=NULL) {
-		if ((cap=pcap_open_live(interface,1500,1,100,errbuf))==NULL)
-			errx(1,"pcap_open_live(): %s",errbuf);
-	} else {
-		if ((cap=pcap_open_offline(pcapfile,errbuf))==NULL)
-			errx(1,"pcap_open_offline(): %s",errbuf);
-	}
-	if (pcap_compile(cap,&fp,"ip and udp and (src port bootpc or bootps) and (dst port bootpc or bootps)",0,0)<0)
-		errx(1,"pcap_compile: %s",pcap_geterr(cap));
-	if (pcap_setfilter(cap,&fp)<0)
-		errx(1,"pcap_setfilter: %s",pcap_geterr(cap));
-	if (pcap_loop(cap,0,pcap_callback,NULL)<0)
-		errx(1,"pcap_loop(%s): %s",interface,pcap_geterr(cap));
-
-	return 0;
+	print_payload(f->payload,f->plen,ts,sip,smac,dip,dmac);
 } // }}}

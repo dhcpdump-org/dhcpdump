@@ -8,10 +8,12 @@ LDFLAGSTODROP:=-Wl,-z,relro -Wl,-z,now
 LDFLAGS:=$(filter-out $(LDFLAGSTODROP),$(LDFLAGS))
 endif
 
+OBJS=main.o dhcpdump.o
+
 all: dhcpdump dhcpdump.8
 
 clean:
-	-rm -f dhcpdump.o dhcpdump dhcpdump.8
+	-rm -f ${OBJS} dhcpdump dhcpdump.8
 
 re:
 	${MAKE} clean
@@ -24,10 +26,13 @@ dhcpdump.8: dhcpdump.pod Makefile
 		--center "User Contributed Software" \
 		dhcpdump.pod dhcpdump.8
 
-dhcpdump: dhcpdump.o Makefile
-	${CC} ${LDFLAGS} -o $@ dhcpdump.o ${LIBS}
+dhcpdump: ${OBJS} Makefile
+	${CC} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
 
-dhcpdump.o: dhcpdump.c dhcp_options.h version.h Makefile
+main.o: main.c dhcpdump.h version.h Makefile
+	${CC} ${CFLAGS} -c -o $@ main.c
+
+dhcpdump.o: dhcpdump.c dhcpdump.h dhcp_options.h version.h Makefile
 	${CC} ${CFLAGS} -c -o $@ dhcpdump.c
 
 VER:=$(shell grep 'define VERSION' version.h|tr -d '\"'|awk '{print $$3}')
