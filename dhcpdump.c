@@ -185,7 +185,7 @@ static inline void printHexString(uint8_t *data,int len,int clen) { // {{{ print
 			printf("  ");
 		printf(" ");
 		for (j=0;j<clen;j++) {
-			char c=data[i*clen+j];
+			unsigned char c=data[i*clen+j]; // isprint() is undefined for a negative char
 
 			if (i*clen+j>=len)
 				break;
