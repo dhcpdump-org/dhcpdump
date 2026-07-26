@@ -84,7 +84,7 @@ static inline int usage(const char *me) { // {{{
 static inline int check_ch(uint8_t *data,int data_len) { // {{{ check for matching CHADDR (Peter Apian-Bennewitz <apian@ise.fhg.de>)
 	char ch_ip[50];
 
-	if (data_len<43)
+	if (data_len<44) // CHADDR spans data[28..43], so 44 bytes must be present
 		return 0;
 
 	sprintf(ch_ip,
