@@ -436,7 +436,7 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 				if (data[j+1]<1)
 					printf("*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+2],data[j+2]>strcountof(enabledisable)?"*unknown*":enabledisable[data[j+2]]);
+					printf("%d (%s)",data[j+2],data[j+2]>=strcountof(enabledisable)?"*unknown*":enabledisable[data[j+2]]);
 				break;
 
 			case 23: // Default IP TTL
@@ -463,7 +463,7 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 				if (data[j+1]<1)
 					printf("*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+2],data[j+2]>strcountof(netbios_node_type)?"*unknown*":netbios_node_type[data[j+2]]);
+					printf("%d (%s)",data[j+2],data[j+2]>=strcountof(netbios_node_type)?"*unknown*":netbios_node_type[data[j+2]]);
 				break;
 
 			case 2: // Time offset
@@ -490,21 +490,21 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 				if (data[j+1]<1)
 					printf("*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+2],data[j+2]>strcountof(ethernet_encapsulation)?"*unknown*":ethernet_encapsulation[data[j+2]]);
+					printf("%d (%s)",data[j+2],data[j+2]>=strcountof(ethernet_encapsulation)?"*unknown*":ethernet_encapsulation[data[j+2]]);
 				break;
 
 			case 52: // Option overload
 				if (data[j+1]<1)
 					printf("*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+2],data[j+2]>strcountof(option_overload)?"*unknown*":option_overload[data[j+2]]);
+					printf("%d (%s)",data[j+2],data[j+2]>=strcountof(option_overload)?"*unknown*":option_overload[data[j+2]]);
 				break;
 
 			case 53: // DHCP message type
 				if (data[j+1]<1)
 					printf("*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+2],data[j+2]>strcountof(dhcp_message_types)?"*unknown*":dhcp_message_types[data[j+2]]);
+					printf("%d (%s)",data[j+2],data[j+2]>=strcountof(dhcp_message_types)?"*unknown*":dhcp_message_types[data[j+2]]);
 				break;
 
 			case 55: // Parameter Request List
@@ -543,7 +543,7 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 						printf("\n%-17s *malformed - truncated*"," ");
 						break;
 					}
-					printf("\n%-17s %-10s "," ",data[i]>strcountof(relayagent_suboptions)?"*unknown*":relayagent_suboptions[data[i]]);
+					printf("\n%-17s %-10s "," ",data[i]>=strcountof(relayagent_suboptions)?"*unknown*":relayagent_suboptions[data[i]]);
 					if (i+data[i+1]+2>j+data[j+1]+2) {
 						printf("*malformed - too large*\n");
 						break;
@@ -557,7 +557,7 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 				if (data[j+1]<2)
 					printf("*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+3],data[j+3]>strcountof(client_architecture_names)?"*unknown*":client_architecture_names[data[j+3]]);
+					printf("%d (%s)",data[j+3],data[j+3]>=strcountof(client_architecture_names)?"*unknown*":client_architecture_names[data[j+3]]);
 				break;
 
 			case 94: // Client Network Interface Identifier
@@ -571,7 +571,7 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 				if (data[j+1]<1)
 					printf("*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+2],data[j+2]>strcountof(auto_configure)?"*unknown*":auto_configure[data[j+2]]);
+					printf("%d (%s)",data[j+2],data[j+2]>=strcountof(auto_configure)?"*unknown*":auto_configure[data[j+2]]);
 				break;
 
 			case 121: // Classless static route
