@@ -5,11 +5,15 @@
 #include <time.h>
 #include <regex.h>
 #include <stdio.h>
+#include <signal.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/time.h>
+#include <arpa/inet.h>
 
+#include "dhcp.h"
 #include "version.h"
+#include "session.h"
 #include "dhcpdump.h"
 
 // }}}
@@ -35,8 +39,16 @@ char errbuf[PCAP_ERRBUF_SIZE];
 char *hmask=NULL; // -h, MAC address filter regexp (NULL if unset)
 regex_t preg; // compiled hmask
 int dohexdump=0; // -H, dump whole packet contents for debug
+int tuimode=0; // -t, track sessions instead of dumping each packet
+pcap_t *cap=NULL; // capture handle (file scope so the signal handler can stop it)
+struct sess_model model; // session tracker, used in -t mode
 
 // }}}
+
+static void on_stop(int sig __attribute__((unused))) { // {{{ break out of pcap_loop on SIGINT/SIGTERM
+	if (cap)
+		pcap_breakloop(cap);
+} // }}}
 
 static inline int usage(const char *me) { // {{{
 	printf("dhcpdump "VERSION"\n");
@@ -46,6 +58,7 @@ static inline int usage(const char *me) { // {{{
 	printf("  Options:\n");
 	printf("    -h regexp filter by <macaddress>\n");
 	printf("    -H prints whole packet hex dump\n");
+	printf("    -t track DHCP sessions and their transactions\n");
 	return 0;
 } // }}}
 
@@ -71,16 +84,28 @@ static void pcap_callback(uint8_t *user __attribute__((unused)),const struct pca
 	char timestamp[40];
 	struct timeval tp;
 
-	if (dohexdump) {
+	if (dohexdump&&!tuimode) {
 		dhcp_hexdump(sp,h->caplen);
 		printf("\n");
 	}
 
-	if (!dhcp_decap(sp,h->caplen,&f,stderr))
+	if (!dhcp_decap(sp,h->caplen,&f,tuimode?NULL:stderr))
 		return;
 
 	if (hmask&&check_ch(f.payload,f.plen))
 		return;
+
+	if (tuimode) { // feed the session tracker; use the captured time, not wall clock
+		struct dhcp_msg m;
+
+		if (dhcp_parse(f.payload,f.plen,&m)) {
+			m.ts=h->ts;
+			m.srcip=ntohl(f.srcip);
+			m.dstip=ntohl(f.dstip);
+			sess_ingest(&model,&m);
+		}
+		return;
+	}
 
 	gettimeofday(&tp,NULL);
 	strftime(timestamp,sizeof timestamp,"%Y-%m-%d %H:%M:%S.",localtime(&(tp.tv_sec)));
@@ -93,7 +118,6 @@ int main(int argc,char **argv) { // {{{
 	struct bpf_program fp;
 	char *interface=NULL;
 	char *pcapfile=NULL;
-	pcap_t *cap;
 	int i;
 
 	for (i=1;i<argc;i++) {
@@ -104,6 +128,9 @@ int main(int argc,char **argv) { // {{{
 		switch (argv[i][1]) {
 			case 'H':
 				dohexdump=1;
+				break;
+			case 't':
+				tuimode=1;
 				break;
 			case 'h':
 				dst=&hmask;
@@ -154,8 +181,25 @@ int main(int argc,char **argv) { // {{{
 		errx(1,"pcap_compile: %s",pcap_geterr(cap));
 	if (pcap_setfilter(cap,&fp)<0)
 		errx(1,"pcap_setfilter: %s",pcap_geterr(cap));
-	if (pcap_loop(cap,0,pcap_callback,NULL)<0)
-		errx(1,"pcap_loop(%s): %s",interface,pcap_geterr(cap));
+	pcap_freecode(&fp);
+
+	if (tuimode) {
+		sess_model_init(&model,SESS_TIMEOUT_MS);
+		signal(SIGINT,on_stop); // let ^C end a live capture and print the summary
+		signal(SIGTERM,on_stop);
+	}
+
+	// pcap_loop returns 0 at EOF (offline) and -2 on pcap_breakloop (our stop);
+	// only -1 is a real error.
+	if (pcap_loop(cap,0,pcap_callback,NULL)==-1)
+		errx(1,"pcap_loop(%s): %s",interface?interface:pcapfile,pcap_geterr(cap));
+
+	if (tuimode) {
+		sess_dump(&model,stdout);
+		sess_model_free(&model);
+	}
+
+	pcap_close(cap);
 
 	return 0;
 } // }}}

@@ -564,7 +564,6 @@ int dhcp_decap(const uint8_t *sp,unsigned caplen,struct dhcp_frame *f,FILE *diag
 	const struct udphdr *udp;
 	const uint16_t *et;
 	unsigned offset=0;
-	const struct ip *ip;
 	unsigned ihl;
 	unsigned plen;
 
@@ -617,10 +616,13 @@ nexthdr:
 		return 0;
 	}
 
-	ip=(const struct ip *)(sp+offset);
-	ihl=ip->ip_hl;
+	// Read IPv4 fields by byte; the header sits at Ethernet offset 14 (2 mod 4)
+	// so casting to struct ip and dereferencing would be a misaligned access.
+	ihl=sp[offset]&0x0f; // IHL is the low nibble of the first byte
 	if (ihl<5)
 		ihl=5;
+	memcpy(&f->srcip,sp+offset+12,4); // src/dst addresses stay in network order
+	memcpy(&f->dstip,sp+offset+16,4);
 	offset+=ihl*4;
 
 	if (caplen<offset+sizeof(struct udphdr)) {
@@ -645,8 +647,6 @@ nexthdr:
 
 	memcpy(f->smac,eh->ether_shost,6);
 	memcpy(f->dmac,eh->ether_dhost,6);
-	f->srcip=ip->ip_src.s_addr;
-	f->dstip=ip->ip_dst.s_addr;
 	f->payload=sp+offset;
 	f->plen=plen;
 

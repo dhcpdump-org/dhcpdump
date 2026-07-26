@@ -8,7 +8,7 @@ LDFLAGSTODROP:=-Wl,-z,relro -Wl,-z,now
 LDFLAGS:=$(filter-out $(LDFLAGSTODROP),$(LDFLAGS))
 endif
 
-OBJS=main.o dhcpdump.o
+OBJS=main.o dhcpdump.o dhcp.o session.o
 
 all: dhcpdump dhcpdump.8
 
@@ -29,11 +29,17 @@ dhcpdump.8: dhcpdump.pod Makefile
 dhcpdump: ${OBJS} Makefile
 	${CC} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
 
-main.o: main.c dhcpdump.h version.h Makefile
+main.o: main.c dhcpdump.h dhcp.h session.h version.h Makefile
 	${CC} ${CFLAGS} -c -o $@ main.c
 
 dhcpdump.o: dhcpdump.c dhcpdump.h dhcp_options.h version.h Makefile
 	${CC} ${CFLAGS} -c -o $@ dhcpdump.c
+
+dhcp.o: dhcp.c dhcp.h Makefile
+	${CC} ${CFLAGS} -c -o $@ dhcp.c
+
+session.o: session.c session.h dhcp.h Makefile
+	${CC} ${CFLAGS} -c -o $@ session.c
 
 VER:=$(shell grep 'define VERSION' version.h|tr -d '\"'|awk '{print $$3}')
 mkotar:
