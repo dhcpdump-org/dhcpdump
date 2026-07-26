@@ -651,7 +651,7 @@ nexthdr:
 				fprintf(stderr,"Ignored too short ethernet+vlan packet: %d bytes\n",h->caplen);
 				return;
 			}
-			if (vlanc>sizeof vlant/sizeof *vlant) {
+			if (vlanc>=sizeof vlant/sizeof *vlant) {
 				fprintf(stderr,"Ignored too many vlans in packet: %d bytes\n",h->caplen);
 				return;
 			}
