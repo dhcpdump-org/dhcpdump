@@ -616,7 +616,7 @@ static void pcap_callback(uint8_t *user __attribute__((unused)),const struct pca
 	struct udphdr *udp;
 	struct timeval tp;
 	unsigned offset=0;
-	uint8_t vlans[20];
+	uint16_t vlans[20]; // holds a 12 bit VLAN ID, must be wider than 8 bits
 	unsigned vlanc=0;
 	char vlant[20];
 	struct ip *ip;
