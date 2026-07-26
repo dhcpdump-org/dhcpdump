@@ -18,11 +18,14 @@
 
 #define LARGESTRING 1024
 
-// DHCP-over-IPv4/UDP predicate; "ip" keeps IPv6 out. Matched both bare and
-// below a VLAN tag, so tagged DHCP is captured too. BPF gives "and"/"or" equal
-// precedence (left to right), hence the explicit parentheses around each side.
+// DHCP-over-IPv4/UDP predicate; "ip" keeps IPv6 out. Matched bare and below one
+// or two VLAN tags, so untagged, single-tagged and QinQ DHCP are all captured.
+// Each "vlan" keyword shifts the decode offset by one tag for the rest of the
+// expression, and that shift leaks rightward across "or"; a flat list of
+// alternatives therefore mis-decodes. The deeper level must be *nested* inside
+// the previous "vlan" group so each shift stays scoped to its own subexpression.
 #define DHCPFILTER "ip and udp and (src port bootpc or bootps) and (dst port bootpc or bootps)"
-#define CAPFILTER "(" DHCPFILTER ") or (vlan and " DHCPFILTER ")"
+#define CAPFILTER "(" DHCPFILTER ") or (vlan and ((" DHCPFILTER ") or (vlan and (" DHCPFILTER "))))"
 
 // }}}
 

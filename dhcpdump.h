@@ -15,7 +15,7 @@
 // It keeps no global state and does no I/O of its own except the printing
 // calls, so it can be reused by both the line-dump CLI and the TUI.
 
-#define DHCP_MAX_VLAN 20 // maximum stacked VLAN tags decoded per frame
+#define DHCP_MAX_VLAN 2 // max stacked VLAN tags decoded (untagged, 802.1Q, QinQ)
 
 // {{{ decapsulated frame
 
