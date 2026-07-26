@@ -567,6 +567,7 @@ static void pcap_callback(uint8_t *user __attribute__((unused)),const struct pca
 	struct ip *ip;
 	uint16_t *et;
 	unsigned ihl;
+	unsigned plen;
 	unsigned i;
 
 	if (dohexdump) {
@@ -622,8 +623,24 @@ nexthdr:
 		ihl=5;
 	offset+=ihl*4;
 
+	if (h->caplen<offset+sizeof(struct udphdr)) {
+		fprintf(stderr,"Ignored too short UDP packet: %d bytes\n",h->caplen);
+		return;
+	}
+
 	udp=(struct udphdr *)(sp+offset);
 	offset+=sizeof(struct udphdr);
+
+	// Length of the DHCP payload: trust neither the UDP length field nor the
+	// capture length on its own, use whichever is smaller. The UDP length
+	// counts its own 8 byte header, the captured payload starts after it.
+	plen=ntohs(udp->UDP_LEN_F);
+	if (plen<sizeof(struct udphdr))
+		plen=0;
+	else
+		plen-=sizeof(struct udphdr);
+	if (plen>h->caplen-offset)
+		plen=h->caplen-offset;
 
 	gettimeofday(&tp,NULL);
 	strftime(timestamp,sizeof timestamp,"%Y-%m-%d %H:%M:%S.",localtime(&(tp.tv_sec)));
@@ -641,7 +658,7 @@ nexthdr:
 	inet_ntop(AF_INET,&ip->ip_src,ip_orig,sizeof ip_orig);
 	inet_ntop(AF_INET,&ip->ip_dst,ip_dest,sizeof ip_dest);
 
-	if (hmask&&check_ch((uint8_t *)(sp+offset),ntohs(udp->UDP_LEN_F)))
+	if (hmask&&check_ch((uint8_t *)(sp+offset),plen))
 		return;
 
 	if (vlanc)
@@ -650,7 +667,7 @@ nexthdr:
 		printf(" %c:%04u",vlant[i],vlans[i]);
 	if (vlanc)
 		printf("\n");
-	printdata((uint8_t *)(sp+offset),ntohs(udp->UDP_LEN_F));
+	printdata((uint8_t *)(sp+offset),plen);
 } // }}}
 
 int main(int argc,char **argv) { // {{{
