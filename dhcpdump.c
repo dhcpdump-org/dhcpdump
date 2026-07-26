@@ -759,8 +759,16 @@ int main(int argc,char **argv) { // {{{
 	if (interface!=NULL&&pcapfile!=NULL)
 		errx(1,"Can not capture from interface \"%s\" and read from file \"%s\" at the same time",interface,pcapfile);
 
-	if (hmask)
-		regcomp(&preg,hmask,REG_EXTENDED|REG_ICASE|REG_NOSUB);
+	if (hmask) {
+		int rc=regcomp(&preg,hmask,REG_EXTENDED|REG_ICASE|REG_NOSUB);
+
+		if (rc) {
+			char rerr[LARGESTRING];
+
+			regerror(rc,&preg,rerr,sizeof rerr);
+			errx(1,"Invalid -h regexp \"%s\": %s",hmask,rerr);
+		}
+	}
 
 	if (interface!=NULL) {
 		if ((cap=pcap_open_live(interface,1500,1,100,errbuf))==NULL)
