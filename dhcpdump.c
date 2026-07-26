@@ -481,6 +481,10 @@ static inline int printdata(uint8_t *data,int data_len) { // {{{ print the heade
 				break;
 
 			case 81: // Client FQDN
+				if (data[j+1]<3) { // flags + 2 rcode bytes are mandatory
+					printf("*malformed - too short*");
+					break;
+				}
 				print8bits(data+j+2);
 				printf("-");
 				print8bits(data+j+3);
