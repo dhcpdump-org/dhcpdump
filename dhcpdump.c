@@ -733,6 +733,8 @@ int main(int argc,char **argv) { // {{{
 	int i;
 
 	for (i=1;i<argc;i++) {
+		char **dst=NULL;
+
 		if (argv[i]==NULL||argv[i][0]!='-')
 			break;
 		switch (argv[i][1]) {
@@ -740,17 +742,24 @@ int main(int argc,char **argv) { // {{{
 				dohexdump=1;
 				break;
 			case 'h':
-				hmask=argv[++i];
+				dst=&hmask;
 				break;
 			case 'i':
-				interface=argv[++i];
+				dst=&interface;
 				break;
 			case 'r':
-				pcapfile=argv[++i];
+				dst=&pcapfile;
 				break;
 			default:
 				fprintf(stderr,"%s: %c: unknown option\n",argv[0],argv[i][1]);
 				return usage(argv[0]);
+		}
+		if (dst) { // -h/-i/-r consume the following argument, which must exist
+			if (i+1>=argc) {
+				fprintf(stderr,"%s: -%c: option requires an argument\n",argv[0],argv[i][1]);
+				return usage(argv[0]);
+			}
+			*dst=argv[++i];
 		}
 	}
 
