@@ -1,3 +1,12 @@
+dhcpdump (2.00pre1-1) UNRELEASED; urgency=medium
+
+  * Latest upstream 2.00pre1
+  * Bump standards to 4.7.4, no changes
+  * Bump dh to 14
+  * Add dep on libyascreen-dev
+
+ -- Boian Bonev <bbonev@ipacct.com>  Mon, 27 Jul 2026 04:54:55 +0000
+
 dhcpdump (1.10-1) unstable; urgency=medium
 
   * Fix copy-paste in d/copyright
