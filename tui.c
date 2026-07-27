@@ -75,6 +75,8 @@ static int ndrows=0;
 
 static void ov_build(struct sess *s); // flatten a client's packets into ov_list (defined below)
 
+#define MACSTR (16*3) // "xx:" per byte of a 16 byte chaddr, the last colon making room for the NUL
+
 // glyphs: box-drawing in UTF-8 terminals, plain ASCII otherwise (toggle with u/a)
 static int unicode=0;
 #define MARK (unicode?"▶":">") // selection marker
@@ -106,7 +108,7 @@ static void on_stop(int sig __attribute__((unused))) {
 // {{{ packet ingest
 
 static void tui_ingest(u_char *user,const struct pcap_pkthdr *h,const u_char *sp) { // {{{
-	struct sess_model *m=(struct sess_model *)user;
+	struct sess_model *m=(struct sess_model *)(void *)user; // via void *: pcap hands back the pointer we gave it, alignment intact
 	struct dhcp_frame f;
 	struct dhcp_msg msg;
 
@@ -193,12 +195,25 @@ static void fmt_age(char *b,size_t n,long s) { // {{{
 
 // {{{ selection
 
-static int mac_match(const struct sess *s) { // {{{
+static int mac_match(const struct sess *s) { // {{{ same rule as same_client() in the model, hlen included
 	int n=sel_hlen>16?16:sel_hlen;
 
+	if (s->hlen!=sel_hlen)
+		return 0;
 	if (n==0)
 		n=16;
 	return s->htype==sel_htype&&!memcmp(s->chaddr,sel_mac,n);
+} // }}}
+
+static void on_msg_evict(const struct sess_msg *mm,void *user __attribute__((unused))) { // {{{ the model is about to free this message; drop every pointer kept to it so none outlives the node
+	int i,j=0;
+
+	if (sel_msg==mm)
+		sel_msg=NULL;
+	for (i=0;i<ov_n;i++) // compact it out of the flattened packet list
+		if (ov_list[i]!=mm)
+			ov_list[j++]=ov_list[i];
+	ov_n=j;
 } // }}}
 
 static void set_sel(const struct sess *s) { // {{{
@@ -499,7 +514,7 @@ static void draw_list(struct sess_model *m,int x,int y,int w,int h,int selidx,in
 	for (i=0;i<*top&&s;i++)
 		s=s->next;
 	for (i=0;i<dataH&&s;i++,s=s->next) {
-		char mac[24],lease[20],age[24],line[512];
+		char mac[MACSTR],lease[20],age[24],line[512];
 		enum tx_state st=s->txs?sess_tx_state(s->txs,now):TX_COMPLETE;
 		int sel=*top+i==selidx;
 		uint32_t attr=sel&&active?YAS_INVERSE:state_attr(st);
@@ -529,7 +544,7 @@ static void drow_add(uint32_t attr,struct sess_msg *msg,const char *text) { // {
 } // }}}
 
 static void build_detail_rows(struct sess *s,const struct timeval *now) { // {{{ flatten a client into detail rows (header, summary, per-message rows)
-	char buf[256],mac[24],ip1[20],ip2[20];
+	char buf[256],mac[MACSTR],ip1[20],ip2[20];
 	struct sess_tx *tx;
 
 	ndrows=0;
@@ -745,7 +760,7 @@ static int draw_text(int x,int y,int w,int h,const char *text,int top,int hoff) 
 } // }}}
 
 static void render_overlay(struct sess *s,int sx,int sy) { // {{{ full-screen decode of one packet
-	char title[256],mac[24],sip[24],ts[40],right[64];
+	char title[256],mac[MACSTR],sip[24],ts[40],right[64];
 	struct sess_msg *mm;
 	char *buf=NULL;
 	size_t sz=0;
@@ -804,7 +819,7 @@ static void render_overlay(struct sess *s,int sx,int sy) { // {{{ full-screen de
 		mbtowc(NULL,NULL,0);
 		while (buf[si]) {
 			wchar_t wc;
-			int cl,cw;
+			int cl,gw;
 
 			if (buf[si]=='\n') {
 				total++;
@@ -821,9 +836,9 @@ static void render_overlay(struct sess *s,int sx,int sy) { // {{{ full-screen de
 				si++;
 				continue;
 			}
-			cw=wcwidth(wc);
-			if (cw>0)
-				col+=cw;
+			gw=wcwidth(wc);
+			if (gw>0)
+				col+=gw;
 			if (buf[si]!=' ') // remember the column after the last non blank glyph
 				lastnb=col;
 			si+=cl;
@@ -998,6 +1013,7 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 	int top=0;
 
 	g_keep=keep;
+	sess_model_on_msg_free(m,on_msg_evict,NULL); // set before any ingest, the offline load below is one
 
 	if (live) {
 		if (pcap_setnonblock(cap,1,errbuf)==-1)
