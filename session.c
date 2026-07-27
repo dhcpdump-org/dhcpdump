@@ -43,30 +43,32 @@ static uint8_t *raw_dup(const uint8_t *src,int len) { // {{{ copy a raw payload,
 	return p;
 } // }}}
 
-static void msg_free(struct sess_msg *mm) { // {{{
+static void msg_free(struct sess_model *m,struct sess_msg *mm) { // {{{ storage is bounded, so messages are dropped as new ones arrive; tell the viewer first so it cannot keep a pointer to freed memory
+	if (m->on_msg_free)
+		m->on_msg_free(mm,m->on_msg_free_user);
 	free(mm->raw);
 	free(mm);
 } // }}}
 
-static void tx_free(struct sess_tx *tx) { // {{{
+static void tx_free(struct sess_model *m,struct sess_tx *tx) { // {{{
 	struct sess_msg *mm=tx->msgs;
 
 	while (mm) {
 		struct sess_msg *n=mm->next;
 
-		msg_free(mm);
+		msg_free(m,mm);
 		mm=n;
 	}
 	free(tx);
 } // }}}
 
-static void sess_free_one(struct sess *s) { // {{{
+static void sess_free_one(struct sess_model *m,struct sess *s) { // {{{
 	struct sess_tx *tx=s->txs;
 
 	while (tx) {
 		struct sess_tx *n=tx->next;
 
-		tx_free(tx);
+		tx_free(m,tx);
 		tx=n;
 	}
 	free(s);
@@ -80,6 +82,13 @@ void sess_model_init(struct sess_model *m,int timeout_ms) { // {{{
 	m->now.tv_sec=0;
 	m->now.tv_usec=0;
 	m->timeout_ms=timeout_ms>0?timeout_ms:SESS_TIMEOUT_MS;
+	m->on_msg_free=NULL;
+	m->on_msg_free_user=NULL;
+} // }}}
+
+void sess_model_on_msg_free(struct sess_model *m,void (*cb)(const struct sess_msg *,void *),void *user) { // {{{
+	m->on_msg_free=cb;
+	m->on_msg_free_user=user;
 } // }}}
 
 void sess_model_free(struct sess_model *m) { // {{{
@@ -88,7 +97,7 @@ void sess_model_free(struct sess_model *m) { // {{{
 	while (s) {
 		struct sess *n=s->next;
 
-		sess_free_one(s);
+		sess_free_one(m,s);
 		s=n;
 	}
 	m->head=m->tail=NULL;
@@ -98,6 +107,11 @@ void sess_model_free(struct sess_model *m) { // {{{
 static int same_client(const struct sess *s,const struct dhcp_msg *msg) { // {{{ match a client by hardware address
 	int n=msg->hlen>16?16:msg->hlen;
 
+	// hlen must agree as well: comparing only the incoming message's hlen bytes
+	// let a client that understates hlen (say 1) alias onto the session of any
+	// client whose address starts with the same byte
+	if (s->hlen!=msg->hlen)
+		return 0;
 	if (n==0) // no hlen given, compare the whole field
 		n=16;
 	return s->htype==msg->htype&&memcmp(s->chaddr,msg->chaddr,n)==0;
@@ -134,7 +148,7 @@ static void sess_evict_lru(struct sess_model *m) { // {{{ drop the least recentl
 			lru=s;
 	sess_unlink(m,lru);
 	m->nsess--;
-	sess_free_one(lru);
+	sess_free_one(m,lru);
 } // }}}
 
 static struct sess *sess_find_or_new(struct sess_model *m,const struct dhcp_msg *msg) { // {{{
@@ -147,19 +161,25 @@ static struct sess *sess_find_or_new(struct sess_model *m,const struct dhcp_msg 
 	s=calloc(1,sizeof *s);
 	if (!s)
 		return NULL;
+	// Make room before linking s in, never after. Trimming afterwards lets the
+	// LRU scan pick s itself whenever this packet is older than every tracked
+	// client - which a capture file can state outright, and an out of order
+	// live capture can produce - and this function would return freed memory.
+	// One eviction is always enough: nsess grows by one client at a time and
+	// is trimmed here first, so it never gets past SESS_MAX to begin with.
+	if (m->nsess>=SESS_MAX)
+		sess_evict_lru(m);
 	memcpy(s->chaddr,msg->chaddr,16);
 	s->hlen=msg->hlen;
 	s->htype=msg->htype;
 	s->first=msg->ts;
-	s->last=msg->ts; // so a brand new client is not the LRU pick below
+	s->last=msg->ts;
 	sess_push_tail(m,s);
 	m->nsess++;
-	while (m->nsess>SESS_MAX)
-		sess_evict_lru(m);
 	return s;
 } // }}}
 
-static struct sess_tx *tx_find_or_new(struct sess *s,const struct dhcp_msg *msg) { // {{{
+static struct sess_tx *tx_find_or_new(struct sess_model *m,struct sess *s,const struct dhcp_msg *msg) { // {{{
 	struct sess_tx *tx;
 
 	for (tx=s->txs;tx;tx=tx->next)
@@ -190,12 +210,12 @@ static struct sess_tx *tx_find_or_new(struct sess *s,const struct dhcp_msg *msg)
 		else
 			s->txs=NULL;
 		s->ntx--;
-		tx_free(old);
+		tx_free(m,old);
 	}
 	return tx;
 } // }}}
 
-static void tx_add_msg(struct sess_tx *tx,const struct dhcp_msg *msg) { // {{{ append oldest first, collapsing retransmissions
+static void tx_add_msg(struct sess_model *m,struct sess_tx *tx,const struct dhcp_msg *msg) { // {{{ append oldest first, collapsing retransmissions
 	struct sess_msg *mm;
 
 	// a retransmission (same type, direction and server as the last message)
@@ -236,7 +256,7 @@ static void tx_add_msg(struct sess_tx *tx,const struct dhcp_msg *msg) { // {{{ a
 		tx->msgs=old->next;
 		if (tx->msgs_tail==old)
 			tx->msgs_tail=NULL;
-		msg_free(old);
+		msg_free(m,old);
 		tx->nmsg--;
 	}
 } // }}}
@@ -260,11 +280,11 @@ void sess_ingest(struct sess_model *m,const struct dhcp_msg *msg) { // {{{
 	else if (msg->op==BOOTREPLY&&msg->siaddr)
 		s->server_ip=msg->siaddr;
 
-	tx=tx_find_or_new(s,msg);
+	tx=tx_find_or_new(m,s,msg);
 	if (!tx)
 		return;
 	tx->last=msg->ts;
-	tx_add_msg(tx,msg);
+	tx_add_msg(m,tx,msg);
 
 	switch (msg->msgtype) { // advance the request/reply state machine
 		case DHCPDISCOVER:
