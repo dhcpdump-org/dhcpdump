@@ -4,9 +4,9 @@ B<dhcpdump> - DHCP packet dumper
 
 =head1 SYNOPSIS
 
-B<dhcpdump> [B<-h> I<regular-expression>] [B<-H>] [B<-t>] B<-i> I<interface>
+B<dhcpdump> [B<-h> I<regular-expression>] [B<-H>] [B<-t>] [B<-Z> I<user>] B<-i> I<interface>
 
-B<dhcpdump> [B<-h> I<regular-expression>] [B<-H>] [B<-t>] B<-r> I<pcapfile>
+B<dhcpdump> [B<-h> I<regular-expression>] [B<-H>] [B<-t>] [B<-Z> I<user>] B<-r> I<pcapfile>
 
 =head1 DESCRIPTION
 
@@ -31,6 +31,16 @@ Instead of getting live data from an interface, a pcap dump file can be
 used:
 
 S<dhcpdump -r pcapfile>
+
+Opening an interface needs privileges, but decoding packets does not, and
+those packets come from anyone able to reach the network. Option B<-Z> drops
+to an unprivileged user once the capture handle is open, so the decoder never
+runs as root:
+
+S<dhcpdump -i eth0 -Z nobody>
+
+The supplementary groups, the group id and the user id are all changed, and
+the drop is verified to be irreversible before any packet is read.
 
 =head1 TUI (SESSION TRACKING)
 
@@ -144,7 +154,8 @@ Always 0.
 
 =head1 NOTES
 
-Privileged access is often needed for accessing the interface.
+Privileged access is often needed for accessing the interface. Use B<-Z> to
+give those privileges up again as soon as the interface is open.
 
 =head1 BUGS
 
