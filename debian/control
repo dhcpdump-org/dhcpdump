@@ -2,9 +2,10 @@ Source: dhcpdump
 Section: admin
 Maintainer: Boian Bonev <bbonev@ipacct.com>
 Build-Depends:
- debhelper-compat (= 13),
+ debhelper-compat (= 14),
  libpcap-dev,
-Standards-Version: 4.7.3
+ libyascreen-dev,
+Standards-Version: 4.7.4
 Homepage: https://github.com/dhcpdump-org/dhcpdump
 Vcs-Browser: https://github.com/dhcpdump-org/dhcpdump
 Vcs-Git: https://github.com/dhcpdump-org/dhcpdump.git
