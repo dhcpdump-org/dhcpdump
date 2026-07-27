@@ -14,6 +14,8 @@
 
 // }}}
 
+static const uint8_t dhcp_cookie[4]={99,130,83,99}; // RFC 2131 magic cookie, marks the start of the option list
+
 static const char *msgtype_names[]={ // {{{ option 53 values
 	/*  0 */ "undefined",
 	/*  1 */ "DISCOVER",
@@ -64,7 +66,11 @@ int dhcp_parse(const uint8_t *data,int data_len,struct dhcp_msg *out) { // {{{ e
 	out->giaddr=be32(data+24);
 	memcpy(out->chaddr,data+28,16);
 
-	// options start after the 4 byte magic cookie at offset 236
+	// Options start after the magic cookie at offset 236. Without it this is
+	// plain BOOTP and the bytes there are vendor data, not a TLV list; the
+	// fixed header is still usable, so report success with no options parsed.
+	if (data_len<DHCP_FIXED+4||memcmp(data+DHCP_FIXED,dhcp_cookie,4))
+		return 1;
 	j=DHCP_FIXED+4;
 	while (j<data_len&&data[j]!=255) {
 		if (data[j]==0) { // pad option, no length or value byte
