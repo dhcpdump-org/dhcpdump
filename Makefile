@@ -15,6 +15,22 @@ CFLAGS+=${CPPFLAGS}
 CFLAGS+=-Wall -Wextra -Wformat -Werror=format-security -Wdate-time -D_FORTIFY_SOURCE=2 -g -O3 -fPIE
 LDFLAGS+=-g -Wl,-z,relro -Wl,-z,now -fPIE -pie
 
+# clang static analyzer driver for "make scan"; prefer a versioned one, fall
+# back to the unversioned name, and let the command line override either way
+SCAN-BUILD?=$(shell for s in scan-build-23 scan-build-22 scan-build-21 scan-build; do command -v $$s >/dev/null 2>&1&&{ echo $$s;break; };done)
+
+# Extra diagnostics, each added only if the compiler in use accepts it. Probing
+# rather than assuming: gcc fails outright on an unknown -W flag, and clang only
+# warns about one, hence -Werror in the probe so both reject it the same way.
+#   -Wformat-signedness   int/unsigned mismatches in printf arguments
+#   -Wshadow              a local hiding another local or a global
+#   -Wpointer-arith       arithmetic on void * and function pointers
+#   -Wcast-align          casts that raise the required alignment; plain gcc
+#   -Wcast-align=strict   only warns on strict alignment targets, so ask gcc for
+#                         the strict form too (clang has no =strict and drops it)
+TRYCFLAGS:=-Wformat-signedness -Wshadow -Wpointer-arith -Wcast-align -Wcast-align=strict
+CFLAGS+=$(foreach f,$(TRYCFLAGS),$(shell $(CC) -Werror $(f) -xc -c /dev/null -o /dev/null >/dev/null 2>&1 && echo $(f)))
+
 # check_dep: locate one dependency, uniformly.
 #   $(call check_dep,<pkg-config module>,<link flag>,<human name>)
 # Prefer pkg-config; else fall back to the link flag only if it actually links;
@@ -53,6 +69,14 @@ clean:
 re:
 	${MAKE} clean
 	${MAKE} -j all
+
+# static analysis; the analyzer's clang replaces CC, so the objects it leaves
+# behind are not a release build - rerun plain 'make re' afterwards. Only the
+# binary is analysed, dhcpdump.8 is pod2man output and has nothing to check.
+scan:
+	@if [ -z "$(SCAN-BUILD)" ]; then echo "scan-build not found: install clang-tools (or pass SCAN-BUILD=...)"; exit 1; fi
+	@$(MAKE) --no-print-directory clean
+	$(SCAN-BUILD) --status-bugs $(MAKE) --no-print-directory -j dhcpdump
 
 dhcpdump.8: dhcpdump.pod Makefile
 	pod2man --section 8 \
