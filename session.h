@@ -86,6 +86,11 @@ struct sess_model {
 	int nsess;
 	struct timeval now; // model clock: latest packet time seen
 	int timeout_ms; // reply timeout
+	// Called just before a message node is freed. Storage is bounded, so
+	// ingesting a packet can evict messages a viewer is still pointing at;
+	// the hook lets it drop the pointer instead of holding a dangling one.
+	void (*on_msg_free)(const struct sess_msg *mm,void *user);
+	void *on_msg_free_user;
 };
 
 // }}}
@@ -94,6 +99,9 @@ struct sess_model {
 
 void sess_model_init(struct sess_model *m,int timeout_ms);
 void sess_model_free(struct sess_model *m);
+
+// Register the message eviction hook (see on_msg_free above); cb may be NULL.
+void sess_model_on_msg_free(struct sess_model *m,void (*cb)(const struct sess_msg *,void *),void *user);
 
 // Feed one parsed message into the model, creating/updating client+transaction.
 void sess_ingest(struct sess_model *m,const struct dhcp_msg *msg);
