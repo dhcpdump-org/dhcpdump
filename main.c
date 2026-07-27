@@ -1,12 +1,15 @@
 // {{{ includes
 
 #include <err.h>
+#include <pwd.h>
+#include <grp.h>
 #include <pcap.h>
 #include <time.h>
 #include <regex.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/time.h>
 
 #include "version.h"
@@ -44,6 +47,7 @@
 char errbuf[PCAP_ERRBUF_SIZE];
 char *hmask=NULL; // -h, MAC address filter regexp (NULL if unset)
 regex_t preg; // compiled hmask
+char *dropuser=NULL; // -Z, user to drop privileges to once the capture is open
 int dohexdump=0; // -H, dump whole packet contents for debug
 int tuimode=0; // -t, track sessions in the interactive TUI
 
@@ -52,22 +56,43 @@ int tuimode=0; // -t, track sessions in the interactive TUI
 static inline int usage(const char *me) { // {{{
 	printf("dhcpdump "VERSION"\n");
 	printf("  Usage:\n");
-	printf("    %s -i <interface> [-h <macaddress>] [-H]" TUIOPT "\n",me);
-	printf("    %s -r <pcapfile>  [-h <macaddress>] [-H]" TUIOPT "\n",me);
+	printf("    %s -i <interface> [-h <macaddress>] [-H] [-Z <user>]" TUIOPT "\n",me);
+	printf("    %s -r <pcapfile>  [-h <macaddress>] [-H] [-Z <user>]" TUIOPT "\n",me);
 	printf("  Options:\n");
 	printf("    -h regexp filter by <macaddress>\n");
 	printf("    -H prints whole packet hex dump\n");
+	printf("    -Z drop privileges to <user> once the capture is open\n");
 #ifndef NO_TUI
 	printf("    -t track DHCP sessions and their transactions\n");
 #endif
 	return 0;
 } // }}}
 
-static inline int check_ch(const uint8_t *data,int data_len) { // {{{ check for matching CHADDR (Peter Apian-Bennewitz <apian@ise.fhg.de>)
+static void drop_privs(const char *user) { // {{{ irrevocably become user; everything past this point parses hostile input and has no reason to be root
+	struct passwd *pw=getpwnam(user);
+
+	if (!pw)
+		errx(1,"-Z: no such user \"%s\"",user);
+	if (geteuid()) { // unprivileged already: nothing to give up, but the promise still has to hold
+		if (geteuid()!=pw->pw_uid)
+			errx(1,"-Z: not privileged enough to become \"%s\"",user);
+		return;
+	}
+	if (setgroups(1,&pw->pw_gid)<0) // supplementary groups first, they need the privileges being dropped
+		err(1,"-Z: setgroups");
+	if (setgid(pw->pw_gid)<0) // gid before uid, the other order cannot be undone
+		err(1,"-Z: setgid");
+	if (setuid(pw->pw_uid)<0)
+		err(1,"-Z: setuid");
+	if (pw->pw_uid&&setuid(0)!=-1) // regaining root must be impossible now
+		errx(1,"-Z: privileges were not dropped");
+} // }}}
+
+static inline int check_ch(const uint8_t *data,int data_len) { // {{{ check for matching CHADDR (Peter Apian-Bennewitz <apian@ise.fhg.de>); returns 0 on match, like regexec
 	char ch_ip[50];
 
-	if (data_len<44) // CHADDR spans data[28..43], so 44 bytes must be present
-		return 0;
+	if (data_len<44) // CHADDR spans data[28..43]; without it there is nothing to match, so it cannot match
+		return REG_NOMATCH;
 
 	sprintf(ch_ip,
 		"%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:"
@@ -142,6 +167,9 @@ int main(int argc,char **argv) { // {{{
 			case 'r':
 				dst=&pcapfile;
 				break;
+			case 'Z':
+				dst=&dropuser;
+				break;
 			default:
 				fprintf(stderr,"%s: %c: unknown option\n",argv[0],argv[i][1]);
 				return usage(argv[0]);
@@ -183,6 +211,9 @@ int main(int argc,char **argv) { // {{{
 	if (pcap_setfilter(cap,&fp)<0)
 		errx(1,"pcap_setfilter: %s",pcap_geterr(cap));
 	pcap_freecode(&fp);
+
+	if (dropuser) // the capture handle is open, nothing below needs privileges
+		drop_privs(dropuser);
 
 #ifndef NO_TUI
 	if (tuimode) {
