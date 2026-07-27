@@ -1,5 +1,6 @@
 // {{{ includes
 
+#include <ctype.h>
 #include <string.h>
 #include <stdint.h>
 
@@ -82,16 +83,21 @@ int dhcp_parse(const uint8_t *data,int data_len,struct dhcp_msg *out) { // {{{ e
 				if (data[j+1]>=4)
 					out->serverid=be32(data+j+2);
 				break;
-			case 12: // hostname
-				{
-					int n=data[j+1];
+			case 12: { // hostname
+				int n=data[j+1],i;
 
-					if (n>(int)sizeof out->hostname-1)
-						n=sizeof out->hostname-1;
-					memcpy(out->hostname,data+j+2,n);
-					out->hostname[n]=0;
+				if (n>(int)sizeof out->hostname-1)
+					n=sizeof out->hostname-1;
+				memcpy(out->hostname,data+j+2,n);
+				out->hostname[n]=0;
+				for (i=0;i<n;i++) { // a crafted hostname may carry terminal escapes, the TUI prints this verbatim
+					unsigned char c=out->hostname[i]; // isprint() is undefined for a negative char
+
+					if (!isprint(c))
+						out->hostname[i]='.';
 				}
 				break;
+			}
 		}
 
 		j+=data[j+1]+2;

@@ -26,9 +26,10 @@
 
 #define LARGESTRING 1024
 
-#define OPTVALCOL 44 // column where option values (and their wrapped continuations) sit; matches printHexString
+#define OPTVALCOL 44 // column where option values (and their wrapped continuations) sit; matches printHex
 #define OPTWRAPCOL 78 // hard wrap column for string values; matches the width of a hex dump line
 #define OPTLISTCOL 12 // indent for multi value lists, one item per line under the option header
+#define OPTHEXCOL 28 // indent for hex+ascii block values; 28+32 hex digits+1 space puts the ascii at column 61, same as in a hex dump line
 
 #ifdef __linux__
 #define UDP_LEN_F len
@@ -131,28 +132,33 @@ static inline void printTime32(const uint8_t *data) { // {{{ print the data as a
 	fprintf(g_out,")");
 } // }}}
 
-static inline void printHexString(const uint8_t *data,int len,int clen) { // {{{ print the data as a hex-list, with the translation into ascii behind it
-	int i,j,k;
+static inline void printHexBlock(const uint8_t *data,int len) { // {{{ print the data below the option header, 16 bytes per line as condensed hex with the ascii translation aligned to the trailing hex dump
+	int i,j;
 
-	for (i=0;i<=len/clen;i++) {
-		for (j=0;j<clen;j++) {
-			if (i*clen+j>=len)
-				break;
-			fprintf(g_out,"%02x",data[i*clen+j]);
+	for (i=0;i<len;i+=16) {
+		fprintf(g_out,"\n%*s",OPTHEXCOL,"");
+		for (j=0;j<16;j++) {
+			if (i+j<len)
+				fprintf(g_out,"%02x",data[i+j]);
+			else
+				fprintf(g_out,"  ");
 		}
-		for (k=j;k<clen;k++)
-			fprintf(g_out,"  ");
 		fprintf(g_out," ");
-		for (j=0;j<clen;j++) {
-			unsigned char c=data[i*clen+j]; // isprint() is undefined for a negative char
+		for (j=0;j<16&&i+j<len;j++) {
+			unsigned char c=data[i+j]; // isprint() is undefined for a negative char
 
-			if (i*clen+j>=len)
-				break;
 			fprintf(g_out,"%c",isprint(c)?c:'.');
 		}
-		if (i*clen+j<len)
-			fprintf(g_out,"\n%44s","");
 	}
+} // }}}
+
+static inline int is_printable(const uint8_t *data,int len) { // {{{ true when every byte is printable ascii; a crafted string value may carry terminal escapes, never print one verbatim without this check
+	int i;
+
+	for (i=0;i<len;i++)
+		if (!isprint(data[i]))
+			return 0;
+	return 1;
 } // }}}
 
 static inline void printWrapped(const uint8_t *data,int len,int firstcol,int contcol,int rmargin) { // {{{ print a value, hard wrapped at an exact column (values are not prose), continuations indented to contcol
@@ -262,11 +268,48 @@ static inline int opt_is_vlist(int o) { // {{{ options whose value is a list pri
 		case 75:
 		case 76:
 		case 78:
+		case 82:
 		case 85:
 		case 92:
 		case 148:
 		case 150:
 		case 162:
+			return 1;
+	}
+	return 0;
+} // }}}
+
+static inline int opt_is_str(int o) { // {{{ options whose value is a text string, printed verbatim when fully printable and as a hex+ascii block below the header otherwise
+	switch (o) {
+		case 12:
+		case 14:
+		case 15:
+		case 17:
+		case 18:
+		case 40:
+		case 56:
+		case 62:
+		case 64:
+		case 66:
+		case 67:
+		case 86:
+		case 87:
+		case 100:
+		case 101:
+		case 114:
+		case 147:
+			return 1;
+	}
+	return 0;
+} // }}}
+
+static inline int opt_is_hexstr(int o) { // {{{ options whose value is an opaque string, shown as a hex+ascii block below the header (which then carries only the name)
+	switch (o) {
+		case 43:
+		case 47:
+		case 60:
+		case 61:
+		case 77:
 			return 1;
 	}
 	return 0;
@@ -300,14 +343,28 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 	fprintf(g_out,"CHADDR: ");
 	printHexColon(data+28,16);
 	fprintf(g_out,"\n");
-	fprintf(g_out," SNAME: %.64s.\n",data+44); // sname is a fixed 64 byte field, may lack a NUL
-	fprintf(g_out," FNAME: %.128s.\n",data+108); // file is a fixed 128 byte field, may lack a NUL
+	i=(int)strnlen((const char *)(data+44),64); // sname is a fixed 64 byte field, may lack a NUL
+	if (is_printable(data+44,i))
+		fprintf(g_out," SNAME: %.64s.\n",data+44);
+	else {
+		fprintf(g_out," SNAME:");
+		printHexBlock(data+44,i);
+		fprintf(g_out,"\n");
+	}
+	i=(int)strnlen((const char *)(data+108),128); // file is a fixed 128 byte field, may lack a NUL
+	if (is_printable(data+108,i))
+		fprintf(g_out," FNAME: %.128s.\n",data+108);
+	else {
+		fprintf(g_out," FNAME:");
+		printHexBlock(data+108,i);
+		fprintf(g_out,"\n");
+	}
 
 	j=236;
 	j+=4; // cookie
 	while (j<data_len&&data[j]!=255) {
 		if (data[j]==0) { // pad option, carries neither a length nor a value byte
-			fprintf(g_out,"OPTION: %3d (  0) %-26s\n",data[j],dhcp_options[data[j]]);
+			fprintf(g_out,"OPTION: %3d (  0) %s\n",data[j],dhcp_options[data[j]]);
 			j++;
 			continue;
 		}
@@ -317,14 +374,14 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 		}
 		nl=(int)strlen(dhcp_options[data[j]]);
 		valcol=18+(nl>26?nl:26); // where the value starts (a long name pushes it right)
-		if (opt_is_vlist(data[j])) // list value: header carries only the name, items follow below
+		if (opt_is_vlist(data[j])||opt_is_hexstr(data[j])||(opt_is_str(data[j])&&!is_printable(data+j+2,data[j+1]))) // value rendered on its own lines below: header carries only the name
 			fprintf(g_out,"OPTION: %3d (%3d) %s",data[j],data[j+1],dhcp_options[data[j]]);
 		else
 			fprintf(g_out,"OPTION: %3d (%3d) %-26s",data[j],data[j+1],dhcp_options[data[j]]);
 
 		switch (data[j]) {
-			default:
-				printHexString(data+j+2,data[j+1],8);
+			default: // options without a known structure, and the known opaque ones (see opt_is_hexstr)
+				printHexBlock(data+j+2,data[j+1]);
 				break;
 
 			case 1: // Subnetmask
@@ -357,7 +414,10 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 			case 101: // TCode - TX-Database String
 			case 114: // Captive-portal
 			case 147: // DOTS Reference Identifier
-				printWrapped(data+j+2,data[j+1],valcol,OPTVALCOL,OPTWRAPCOL);
+				if (is_printable(data+j+2,data[j+1]))
+					printWrapped(data+j+2,data[j+1],valcol,OPTVALCOL,OPTWRAPCOL);
+				else
+					printHexBlock(data+j+2,data[j+1]);
 				break;
 
 			case 3: // Routers
@@ -457,11 +517,6 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 					print8bits(data+j+2);
 				break;
 
-			case 43: // Vendor specific info
-			case 47: // NetBIOS scope (no idea how it looks like)
-				printHexString(data+j+2,data[j+1],8);
-				break;
-
 			case 46: // NetBIOS over TCP/IP node type
 				if (data[j+1]<1)
 					fprintf(g_out,"*malformed - too short*");
@@ -518,12 +573,6 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 				printHex(data+j+2,data[j+1]);
 				break;
 
-			case 60: // Class identifier
-			case 61: // Client identifier
-			case 77: // User class
-				printHexString(data+j+2,data[j+1],8);
-				break;
-
 			case 81: // Client FQDN
 				if (data[j+1]<3) { // flags + 2 rcode bytes are mandatory
 					fprintf(g_out,"*malformed - too short*");
@@ -534,10 +583,13 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 				print8bits(data+j+3);
 				fprintf(g_out,"-");
 				print8bits(data+j+4);
-				fprintf(g_out," ");
-				strncpy(buf,(char *)&data[j+5],data[j+1]-3);
-				buf[data[j+1]-3]=0;
-				fprintf(g_out,"%s",buf);
+				if (is_printable(data+j+5,data[j+1]-3)) {
+					fprintf(g_out," ");
+					strncpy(buf,(char *)&data[j+5],data[j+1]-3);
+					buf[data[j+1]-3]=0;
+					fprintf(g_out,"%s",buf);
+				} else // the E flag makes the name DNS wire format; escapes in a plain name are handled the same way
+					printHexBlock(data+j+5,data[j+1]-3);
 				break;
 
 			case 82: // Relay Agent Information
@@ -546,12 +598,12 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 						fprintf(g_out,"\n%-17s *malformed - truncated*"," ");
 						break;
 					}
-					fprintf(g_out,"\n%-17s %-10s "," ",data[i]>=strcountof(relayagent_suboptions)?"*unknown*":relayagent_suboptions[data[i]]);
+					fprintf(g_out,"\n%-17s %s"," ",data[i]>=strcountof(relayagent_suboptions)?"*unknown*":relayagent_suboptions[data[i]]);
 					if (i+data[i+1]+2>j+data[j+1]+2) {
-						fprintf(g_out,"*malformed - too large*\n");
+						fprintf(g_out," *malformed - too large*\n");
 						break;
 					}
-					printHexString(data+i+2,data[i+1],16);
+					printHexBlock(data+i+2,data[i+1]);
 					i+=data[i+1]+2;
 				}
 				break;
