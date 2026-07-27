@@ -42,10 +42,14 @@ enum tx_state {
 // {{{ model
 
 struct sess_msg { // one message inside a transaction, oldest first
-	struct timeval ts;
+	struct timeval ts; // time of the most recent (retransmitted) copy
+	uint8_t *raw; // kept copy of the DHCP payload (for the full packet view), or NULL
+	int rawlen; // length of raw
 	uint32_t srcip; // host order, sender L3 address
+	uint32_t serverid; // server identifier (option 54), 0 if none
 	uint8_t msgtype; // DHCP message type (option 53)
 	uint8_t op; // BOOTREQUEST / BOOTREPLY (direction)
+	int count; // identical messages collapsed here (retransmissions), >=1
 	struct sess_msg *next;
 };
 
@@ -57,12 +61,13 @@ struct sess_tx { // one transaction (a single XID), newest first within a sessio
 	uint8_t awaiting; // reply msgtype still due, 0 if none
 	uint8_t result; // 0 in progress, DHCPACK bound, DHCPNAK refused
 	uint32_t yiaddr; // offered/assigned IP, host order
+	uint32_t selected_server; // server the client accepted (REQUEST option 54)
 	struct sess_msg *msgs,*msgs_tail; // messages, oldest first
 	int nmsg;
 	struct sess_tx *prev,*next;
 };
 
-struct sess { // one client, keyed by hardware address; MRU order in the model
+struct sess { // one client, keyed by hardware address; kept in stable first-seen order
 	uint8_t chaddr[16];
 	uint8_t hlen;
 	uint8_t htype;
@@ -77,7 +82,7 @@ struct sess { // one client, keyed by hardware address; MRU order in the model
 };
 
 struct sess_model {
-	struct sess *head,*tail; // clients, most recently active first
+	struct sess *head,*tail; // clients, in first-seen order (stable, no reshuffling)
 	int nsess;
 	struct timeval now; // model clock: latest packet time seen
 	int timeout_ms; // reply timeout
@@ -95,9 +100,6 @@ void sess_ingest(struct sess_model *m,const struct dhcp_msg *msg);
 
 // Derived display state of a transaction as of time now.
 enum tx_state sess_tx_state(const struct sess_tx *tx,const struct timeval *now);
-
-// Temporary text dump of the whole model (used until the TUI lands).
-void sess_dump(const struct sess_model *m,FILE *out);
 
 // }}}
 

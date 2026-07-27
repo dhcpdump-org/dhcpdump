@@ -48,6 +48,13 @@ int dhcp_decap(const uint8_t *frame,unsigned caplen,struct dhcp_frame *f,FILE *d
 // timestamp string shown on the TIME: line.
 void dhcp_print(const struct dhcp_frame *f,const char *ts);
 
+// Same, but to an arbitrary stream (e.g. a memory stream for the TUI).
+void dhcp_fprint(FILE *out,const struct dhcp_frame *f,const char *ts);
+
+// Decode just the BOOTP header and options of a DHCP payload to out, without
+// the VLAN/TIME/IP frame lines. Used to render a stored packet in the TUI.
+void dhcp_fprint_payload(FILE *out,const uint8_t *data,int data_len,const char *bar);
+
 // Full-frame hex dump (the -H output) to stdout.
 void dhcp_hexdump(const uint8_t *buf,int len);
 

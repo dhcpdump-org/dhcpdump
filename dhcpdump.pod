@@ -4,9 +4,9 @@ B<dhcpdump> - DHCP packet dumper
 
 =head1 SYNOPSIS
 
-B<dhcpdump> [B<-h> I<regular-expression>] [B<-H>] B<-i> I<interface>
+B<dhcpdump> [B<-h> I<regular-expression>] [B<-H>] [B<-t>] B<-i> I<interface>
 
-B<dhcpdump> [B<-h> I<regular-expression>] [B<-H>] B<-r> I<pcapfile>
+B<dhcpdump> [B<-h> I<regular-expression>] [B<-H>] [B<-t>] B<-r> I<pcapfile>
 
 =head1 DESCRIPTION
 
@@ -32,6 +32,80 @@ used:
 
 S<dhcpdump -r pcapfile>
 
+=head1 TUI (SESSION TRACKING)
+
+Option B<-t> switches to an interactive full-screen view that groups packets
+into sessions by client hardware address, and within each client into
+transactions by transaction id (XID). Each transaction lists its messages
+(for example DISCOVER, OFFER, REQUEST, ACK) and a derived, colour coded state:
+I<wait> (a request is still awaiting its reply), I<offered>, I<complete>
+(bound), I<NAK>, or I<timeout> (a reply never arrived in time). Repeated
+retransmissions are collapsed with a count, and an offer from a server the
+client did not ultimately pick is shown in yellow.
+
+With B<-i> the view updates live as packets arrive; with B<-r> the whole
+capture is loaded first and then browsed. The B<-h> filter applies here too,
+restricting which clients are tracked. Clients are shown in a stable
+first-seen order so the list does not reshuffle as traffic arrives.
+
+The view has two panes. In the client list on the left/top select a client,
+then move into the detail pane to pick one of its packets, then open the full
+decode of that packet - the same detail the line mode prints.
+
+The following keys are available:
+
+=over
+
+=item B<q>, B<Ctrl-C> - quit (from any view)
+
+=item B<h>, B<H>, B<?>, B<F1> - toggle a help dialog listing the keys for the current pane
+
+=item B<TAB> - toggle between side-by-side and top/bottom layouts
+
+=item B<u> / B<a> - use UTF-8 box glyphs / plain ASCII
+
+=item B<Ctrl-L> - redraw the screen
+
+=back
+
+In the client list:
+
+=over
+
+=item B<j> / B<k>, B<Down> / B<Up> - select a client
+
+=item B<g> / B<G>, B<Home> / B<End>, B<PgUp> / B<PgDn> - jump / page
+
+=item B<Right>, B<Enter> - move into the detail pane
+
+=back
+
+In the detail pane:
+
+=over
+
+=item B<j> / B<k>, B<Down> / B<Up>, B<PgUp> / B<PgDn> - select a packet
+
+=item B<Left>, B<Esc>, B<Backspace> - back to the client list
+
+=item B<Right>, B<Enter> - open the full decode of the selected packet
+
+=back
+
+In the packet decode:
+
+=over
+
+=item B<Left> / B<Right> - previous / next packet
+
+=item B<Up> / B<Down>, B<PgUp> / B<PgDn> - scroll
+
+=item B<< < >> / B<< > >> - pan horizontally when the decode is wider than the screen
+
+=item B<Esc>, B<Backspace> - back to the detail pane
+
+=back
+
 =head1 OUTPUT
 
   TIME: 15:45:02.084272
@@ -53,10 +127,11 @@ CHADDR: 00:c0:4f:82:ac:7f:00:00:00:00:00:00:00:00:00:00
 OPTION:  53 (  1) DHCP message type         3 (DHCPREQUEST)
 OPTION:  54 (  4) Server identifier         130.139.64.101
 OPTION:  50 (  4) Request IP address        130.139.64.143
-OPTION:  55 (  7) Parameter Request List      1 (Subnet mask)
-                                              3 (Routers)
-                                             58 (T1)
-                                             59 (T2)
+OPTION:  55 (  7) Parameter Request List
+            1   (Subnet mask)
+            3   (Router)
+            58  (T1)
+            59  (T2)
 
 At the option field, the first field is the value of the option,
 the second one (between brackets) is the length of the option-datafield,

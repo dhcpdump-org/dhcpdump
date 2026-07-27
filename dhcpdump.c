@@ -26,6 +26,10 @@
 
 #define LARGESTRING 1024
 
+#define OPTVALCOL 44 // column where option values (and their wrapped continuations) sit; matches printHexString
+#define OPTWRAPCOL 78 // hard wrap column for string values; matches the width of a hex dump line
+#define OPTLISTCOL 12 // indent for multi value lists, one item per line under the option header
+
 #ifdef __linux__
 #define UDP_LEN_F len
 #else
@@ -48,78 +52,83 @@
 
 // }}}
 
+// Output stream for the option decoder. Set by dhcp_fprint/dhcp_fprint_payload
+// before the helpers below run, so the same code renders to stdout (line dump)
+// or to a memory stream (TUI packet detail).
+static FILE *g_out;
+
 static inline void printIPaddress(const uint8_t *data) { // {{{ print the data as an IP address
-	printf("%u.%u.%u.%u",data[0],data[1],data[2],data[3]);
+	fprintf(g_out,"%u.%u.%u.%u",data[0],data[1],data[2],data[3]);
 } // }}}
 
 static inline void printIPaddressAddress(const uint8_t *data) { // {{{ print the data as an IP address and an IP address
-	printf("%u.%u.%u.%u %u.%u.%u.%u",
+	fprintf(g_out,"%u.%u.%u.%u %u.%u.%u.%u",
 		data[0],data[1],data[2],data[3],
 		data[4],data[5],data[6],data[7]);
 } // }}}
 
 static inline void printIPaddressMask(const uint8_t *data) { // {{{ print the data as an IP address and mask
-	printf("%u.%u.%u.%u/%u.%u.%u.%u",
+	fprintf(g_out,"%u.%u.%u.%u/%u.%u.%u.%u",
 		data[0],data[1],data[2],data[3],
 		data[4],data[5],data[6],data[7]);
 } // }}}
 
 static inline void print8bits(const uint8_t *data) { // {{{ prints a value of 8 bits (1 byte)
-	printf("%u",data[0]);
+	fprintf(g_out,"%u",data[0]);
 } // }}}
 
 static inline void print16bits(const uint8_t *data) { // {{{ prints a value of 16 bits (2 bytes)
-	printf("%u",(data[0]<<8)|data[1]);
+	fprintf(g_out,"%u",(data[0]<<8)|data[1]);
 } // }}}
 
 static inline void printTime8(const uint8_t *data) { // {{{ print the data as a 8bits time-value
 	unsigned t=data[0];
 
-	printf("%u (",t);
+	fprintf(g_out,"%u (",t);
 	if (t>SPERW) {
-		printf("%uw",t/(SPERW));
+		fprintf(g_out,"%uw",t/(SPERW));
 		t%=SPERW;
 	}
 	if (t>SPERD) {
-		printf("%ud",t/(SPERD));
+		fprintf(g_out,"%ud",t/(SPERD));
 		t%=SPERD;
 	}
 	if (t>SPERH) {
-		printf("%uh",t/(SPERH));
+		fprintf(g_out,"%uh",t/(SPERH));
 		t%=SPERH;
 	}
 	if (t>SPERM) {
-		printf("%um",t/(SPERM));
+		fprintf(g_out,"%um",t/(SPERM));
 		t%=SPERM;
 	}
 	if (t>0)
-		printf("%us",t);
-	printf(")");
+		fprintf(g_out,"%us",t);
+	fprintf(g_out,")");
 } // }}}
 
 static inline void printTime32(const uint8_t *data) { // {{{ print the data as a 32bits time-value
 	unsigned t=(data[0]<<24)|(data[1]<<16)|(data[2]<<8)|data[3];
 
-	printf("%u (",t);
+	fprintf(g_out,"%u (",t);
 	if (t>SPERW) {
-		printf("%uw",t/(SPERW));
+		fprintf(g_out,"%uw",t/(SPERW));
 		t%=SPERW;
 	}
 	if (t>SPERD) {
-		printf("%ud",t/(SPERD));
+		fprintf(g_out,"%ud",t/(SPERD));
 		t%=SPERD;
 	}
 	if (t>SPERH) {
-		printf("%uh",t/(SPERH));
+		fprintf(g_out,"%uh",t/(SPERH));
 		t%=SPERH;
 	}
 	if (t>SPERM) {
-		printf("%um",t/(SPERM));
+		fprintf(g_out,"%um",t/(SPERM));
 		t%=SPERM;
 	}
 	if (t>0)
-		printf("%us",t);
-	printf(")");
+		fprintf(g_out,"%us",t);
+	fprintf(g_out,")");
 } // }}}
 
 static inline void printHexString(const uint8_t *data,int len,int clen) { // {{{ print the data as a hex-list, with the translation into ascii behind it
@@ -129,20 +138,33 @@ static inline void printHexString(const uint8_t *data,int len,int clen) { // {{{
 		for (j=0;j<clen;j++) {
 			if (i*clen+j>=len)
 				break;
-			printf("%02x",data[i*clen+j]);
+			fprintf(g_out,"%02x",data[i*clen+j]);
 		}
 		for (k=j;k<clen;k++)
-			printf("  ");
-		printf(" ");
+			fprintf(g_out,"  ");
+		fprintf(g_out," ");
 		for (j=0;j<clen;j++) {
 			unsigned char c=data[i*clen+j]; // isprint() is undefined for a negative char
 
 			if (i*clen+j>=len)
 				break;
-			printf("%c",isprint(c)?c:'.');
+			fprintf(g_out,"%c",isprint(c)?c:'.');
 		}
 		if (i*clen+j<len)
-			printf("\n%44s","");
+			fprintf(g_out,"\n%44s","");
+	}
+} // }}}
+
+static inline void printWrapped(const uint8_t *data,int len,int firstcol,int contcol,int rmargin) { // {{{ print a value, hard wrapped at an exact column (values are not prose), continuations indented to contcol
+	int col=firstcol,i;
+
+	for (i=0;i<len;i++) {
+		if (col>=rmargin) {
+			fprintf(g_out,"\n%*s",contcol,"");
+			col=contcol;
+		}
+		fprintf(g_out,"%c",data[i]);
+		col++;
 	}
 } // }}}
 
@@ -153,10 +175,10 @@ static inline void printHex(const uint8_t *data,int len) { // {{{ print the data
 		for (j=0;j<8;j++) {
 			if (i*8+j>=len)
 				break;
-			printf("%02x",data[i*8+j]);
+			fprintf(g_out,"%02x",data[i*8+j]);
 		}
 		if (i*8+j<len)
-			printf("\n%44s","");
+			fprintf(g_out,"\n%44s","");
 	}
 } // }}}
 
@@ -165,16 +187,16 @@ static inline void printHexColon(const uint8_t *data,int len) { // {{{ print the
 
 	for (i=0;i<len;i++) {
 		if (i!=0)
-			printf(":");
-		printf("%02x",data[i]);
+			fprintf(g_out,":");
+		fprintf(g_out,"%02x",data[i]);
 	}
 } // }}}
 
-static inline void printReqParmList(const uint8_t *data,int len) { // {{{ print the list of requested parameters
+static inline void printReqParmList(const uint8_t *data,int len) { // {{{ print the list of requested parameters, one per line
 	int i;
 
 	for (i=0;i<len;i++)
-		printf("%-3d (%s)%s%*s",data[i],dhcp_options[data[i]],(i+1<len)?"\n":"",(i+1<len)?44:0,"");
+		fprintf(g_out,"\n%*s%-3d (%s)",OPTLISTCOL,"",data[i],dhcp_options[data[i]]);
 } // }}}
 
 static inline void printIPaddressCompactMaskAddress(const uint8_t *data,int len) { // {{{ print the data as series of IP address and masks
@@ -192,14 +214,14 @@ static inline void printIPaddressCompactMaskAddress(const uint8_t *data,int len)
 			i+=j;
 		}
 	if (!isok) {
-		printf("Malformed\n%44s","");
+		fprintf(g_out,"Malformed\n%44s","");
 		printHex(data,len);
 		return;
 	}
 
 	for (i=0;i<len;i++) {
 		j=4+(data[i]+7)/8;
-		printf("%s%*s%u.%u.%u.%u/%u via %u.%u.%u.%u",
+		fprintf(g_out,"%s%*s%u.%u.%u.%u/%u via %u.%u.%u.%u",
 			i?"\n":"",
 			i?44:0,"",
 			j>4?data[i+1]:0,j>5?data[i+2]:0,j>6?data[i+3]:0,j>7?data[i+4]:0,data[i],
@@ -208,60 +230,97 @@ static inline void printIPaddressCompactMaskAddress(const uint8_t *data,int len)
 	}
 } // }}}
 
-static void print_payload(const uint8_t *data,int data_len,const char *ts,const char *sip,const char *smac,const char *dip,const char *dmac) { // {{{ print the header and the options
-	char buf[LARGESTRING];
-	int i,j;
-
-	if (data_len==0)
-		return;
-
-	if (data_len<236) { // the fixed BOOTP header (op..file) is 236 bytes
-		fprintf(stderr,"Ignored too short DHCP packet: %d bytes\n",data_len);
-		return;
+static inline int opt_is_vlist(int o) { // {{{ options whose value is a list printed one item per line (header carries only the name)
+	switch (o) {
+		case 3:
+		case 4:
+		case 5:
+		case 6:
+		case 7:
+		case 8:
+		case 9:
+		case 10:
+		case 11:
+		case 21:
+		case 25:
+		case 33:
+		case 41:
+		case 42:
+		case 44:
+		case 45:
+		case 48:
+		case 49:
+		case 55:
+		case 65:
+		case 68:
+		case 69:
+		case 70:
+		case 71:
+		case 72:
+		case 73:
+		case 74:
+		case 75:
+		case 76:
+		case 78:
+		case 85:
+		case 92:
+		case 148:
+		case 150:
+		case 162:
+			return 1;
 	}
+	return 0;
+} // }}}
 
-	printf("  TIME: %s\n",ts);
-	printf("    IP: %s (%s) > %s (%s)\n",sip,smac,dip,dmac);
-	printf("    OP: %d (%s)\n",data[0],data[0]>=strcountof(operands)?"*unknown*":operands[data[0]]);
-	printf(" HTYPE: %d (%s)\n",data[1],data[1]>=strcountof(htypes)?"*unknown*":htypes[data[1]]);
-	printf("  HLEN: %d\n",data[2]);
-	printf("  HOPS: %d\n",data[3]);
-	printf("   XID: %02x%02x%02x%02x\n",data[4],data[5],data[6],data[7]);
-	printf("  SECS: ");
+static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOOTP header and the options (caller ensures data_len>=236)
+	char buf[LARGESTRING];
+	int i,j,valcol,nl;
+
+	fprintf(g_out,"    OP: %d (%s)\n",data[0],data[0]>=strcountof(operands)?"*unknown*":operands[data[0]]);
+	fprintf(g_out," HTYPE: %d (%s)\n",data[1],data[1]>=strcountof(htypes)?"*unknown*":htypes[data[1]]);
+	fprintf(g_out,"  HLEN: %d\n",data[2]);
+	fprintf(g_out,"  HOPS: %d\n",data[3]);
+	fprintf(g_out,"   XID: %02x%02x%02x%02x\n",data[4],data[5],data[6],data[7]);
+	fprintf(g_out,"  SECS: ");
 	print16bits(data+8);
-	printf("\n");
-	printf(" FLAGS: %x\n",(data[10]<<8)|data[11]);
-	printf("CIADDR: ");
+	fprintf(g_out,"\n");
+	fprintf(g_out," FLAGS: %x\n",(data[10]<<8)|data[11]);
+	fprintf(g_out,"CIADDR: ");
 	printIPaddress(data+12);
-	printf("\n");
-	printf("YIADDR: ");
+	fprintf(g_out,"\n");
+	fprintf(g_out,"YIADDR: ");
 	printIPaddress(data+16);
-	printf("\n");
-	printf("SIADDR: ");
+	fprintf(g_out,"\n");
+	fprintf(g_out,"SIADDR: ");
 	printIPaddress(data+20);
-	printf("\n");
-	printf("GIADDR: ");
+	fprintf(g_out,"\n");
+	fprintf(g_out,"GIADDR: ");
 	printIPaddress(data+24);
-	printf("\n");
-	printf("CHADDR: ");
+	fprintf(g_out,"\n");
+	fprintf(g_out,"CHADDR: ");
 	printHexColon(data+28,16);
-	printf("\n");
-	printf(" SNAME: %.64s.\n",data+44); // sname is a fixed 64 byte field, may lack a NUL
-	printf(" FNAME: %.128s.\n",data+108); // file is a fixed 128 byte field, may lack a NUL
+	fprintf(g_out,"\n");
+	fprintf(g_out," SNAME: %.64s.\n",data+44); // sname is a fixed 64 byte field, may lack a NUL
+	fprintf(g_out," FNAME: %.128s.\n",data+108); // file is a fixed 128 byte field, may lack a NUL
 
 	j=236;
 	j+=4; // cookie
 	while (j<data_len&&data[j]!=255) {
 		if (data[j]==0) { // pad option, carries neither a length nor a value byte
-			printf("OPTION: %3d (  0) %-26s\n",data[j],dhcp_options[data[j]]);
+			fprintf(g_out,"OPTION: %3d (  0) %-26s\n",data[j],dhcp_options[data[j]]);
 			j++;
 			continue;
 		}
 		if (j+2>data_len||j+2+data[j+1]>data_len) { // length byte and value bytes must be captured
-			printf("OPTION: %3d       *malformed - truncated option*\n",data[j]);
+			fprintf(g_out,"OPTION: %3d       *malformed - truncated option*\n",data[j]);
 			break;
 		}
-		printf("OPTION: %3d (%3d) %-26s",data[j],data[j+1],dhcp_options[data[j]]);
+		nl=(int)strlen(dhcp_options[data[j]]);
+		valcol=18+(nl>26?nl:26); // where the value starts (a long name pushes it right)
+		if (opt_is_vlist(data[j])) // list value: header carries only the name, items follow below
+			fprintf(g_out,"OPTION: %3d (%3d) %s",data[j],data[j+1],dhcp_options[data[j]]);
+		else
+			fprintf(g_out,"OPTION: %3d (%3d) %-26s",data[j],data[j+1],dhcp_options[data[j]]);
 
 		switch (data[j]) {
 			default:
@@ -276,7 +335,7 @@ static void print_payload(const uint8_t *data,int data_len,const char *ts,const 
 			case 54: // Server identifier
 			case 118: // Subnet selection option
 				if (data[j+1]<4)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
 					printIPaddress(data+j+2);
 				break;
@@ -298,9 +357,7 @@ static void print_payload(const uint8_t *data,int data_len,const char *ts,const 
 			case 101: // TCode - TX-Database String
 			case 114: // Captive-portal
 			case 147: // DOTS Reference Identifier
-				strncpy(buf,(char *)&data[j+2],data[j+1]);
-				buf[data[j+1]]=0;
-				printf("%s",buf);
+				printWrapped(data+j+2,data[j+1],valcol,OPTVALCOL,OPTWRAPCOL);
 				break;
 
 			case 3: // Routers
@@ -335,32 +392,28 @@ static void print_payload(const uint8_t *data,int data_len,const char *ts,const 
 			case 150: // TFTP server address
 			case 162: // Encrypted DNS Server
 				for (i=0;i<data[j+1]/4;i++) {
-					if (i!=0)
-						printf(",");
+					fprintf(g_out,"\n%*s",OPTLISTCOL,"");
 					printIPaddress(data+j+2+i*4);
 				}
 				break;
 
 			case 21: // Policy filter
 				for (i=0;i<data[j+1]/8;i++) {
-					if (i!=0)
-						printf(",");
+					fprintf(g_out,"\n%*s",OPTLISTCOL,"");
 					printIPaddressMask(data+j+2+i*8);
 				}
 				break;
 
 			case 33: // Static route
 				for (i=0;i<data[j+1]/8;i++) {
-					if (i!=0)
-						printf(",");
+					fprintf(g_out,"\n%*s",OPTLISTCOL,"");
 					printIPaddressAddress(data+j+2+i*8);
 				}
 				break;
 
 			case 25: // Path MTU plateau table
 				for (i=0;i<data[j+1]/2;i++) {
-					if (i!=0)
-						printf(",");
+					fprintf(g_out,"\n%*s",OPTLISTCOL,"");
 					print16bits(data+j+2+i*2);
 				}
 				break;
@@ -370,7 +423,7 @@ static void print_payload(const uint8_t *data,int data_len,const char *ts,const 
 			case 26: // Interface MTU
 			case 57: // Maximum DHCP message size
 				if (data[j+1]<2)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
 					print16bits(data+j+2);
 				break;
@@ -384,14 +437,14 @@ static void print_payload(const uint8_t *data,int data_len,const char *ts,const 
 			case 34: // Trailer encapsulation
 			case 39: // TCP keepalive garbage
 				if (data[j+1]<1)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+2],data[j+2]>=strcountof(enabledisable)?"*unknown*":enabledisable[data[j+2]]);
+					fprintf(g_out,"%d (%s)",data[j+2],data[j+2]>=strcountof(enabledisable)?"*unknown*":enabledisable[data[j+2]]);
 				break;
 
 			case 23: // Default IP TTL
 				if (data[j+1]<1)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
 					printTime8(data+j+2);
 				break;
@@ -399,7 +452,7 @@ static void print_payload(const uint8_t *data,int data_len,const char *ts,const 
 			case 37: // TCP default TTL
 			case 145: // FORCERENEW_NONCE_CAPABLE
 				if (data[j+1]<1)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
 					print8bits(data+j+2);
 				break;
@@ -411,9 +464,9 @@ static void print_payload(const uint8_t *data,int data_len,const char *ts,const 
 
 			case 46: // NetBIOS over TCP/IP node type
 				if (data[j+1]<1)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+2],data[j+2]>=strcountof(netbios_node_type)?"*unknown*":netbios_node_type[data[j+2]]);
+					fprintf(g_out,"%d (%s)",data[j+2],data[j+2]>=strcountof(netbios_node_type)?"*unknown*":netbios_node_type[data[j+2]]);
 				break;
 
 			case 2: // Time offset
@@ -431,30 +484,30 @@ static void print_payload(const uint8_t *data,int data_len,const char *ts,const 
 			case 155: // query-end-time
 			case 211: // reboot-time
 				if (data[j+1]<4)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
 					printTime32(data+j+2);
 				break;
 
 			case 36: // Ethernet encapsulation
 				if (data[j+1]<1)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+2],data[j+2]>=strcountof(ethernet_encapsulation)?"*unknown*":ethernet_encapsulation[data[j+2]]);
+					fprintf(g_out,"%d (%s)",data[j+2],data[j+2]>=strcountof(ethernet_encapsulation)?"*unknown*":ethernet_encapsulation[data[j+2]]);
 				break;
 
 			case 52: // Option overload
 				if (data[j+1]<1)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+2],data[j+2]>=strcountof(option_overload)?"*unknown*":option_overload[data[j+2]]);
+					fprintf(g_out,"%d (%s)",data[j+2],data[j+2]>=strcountof(option_overload)?"*unknown*":option_overload[data[j+2]]);
 				break;
 
 			case 53: // DHCP message type
 				if (data[j+1]<1)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+2],data[j+2]>=strcountof(dhcp_message_types)?"*unknown*":dhcp_message_types[data[j+2]]);
+					fprintf(g_out,"%d (%s)",data[j+2],data[j+2]>=strcountof(dhcp_message_types)?"*unknown*":dhcp_message_types[data[j+2]]);
 				break;
 
 			case 55: // Parameter Request List
@@ -473,29 +526,29 @@ static void print_payload(const uint8_t *data,int data_len,const char *ts,const 
 
 			case 81: // Client FQDN
 				if (data[j+1]<3) { // flags + 2 rcode bytes are mandatory
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 					break;
 				}
 				print8bits(data+j+2);
-				printf("-");
+				fprintf(g_out,"-");
 				print8bits(data+j+3);
-				printf("-");
+				fprintf(g_out,"-");
 				print8bits(data+j+4);
-				printf(" ");
+				fprintf(g_out," ");
 				strncpy(buf,(char *)&data[j+5],data[j+1]-3);
 				buf[data[j+1]-3]=0;
-				printf("%s",buf);
+				fprintf(g_out,"%s",buf);
 				break;
 
 			case 82: // Relay Agent Information
 				for (i=j+2;i<j+data[j+1]+2;) {
 					if (i+2>j+data[j+1]+2) { // suboption code and length bytes must be present
-						printf("\n%-17s *malformed - truncated*"," ");
+						fprintf(g_out,"\n%-17s *malformed - truncated*"," ");
 						break;
 					}
-					printf("\n%-17s %-10s "," ",data[i]>=strcountof(relayagent_suboptions)?"*unknown*":relayagent_suboptions[data[i]]);
+					fprintf(g_out,"\n%-17s %-10s "," ",data[i]>=strcountof(relayagent_suboptions)?"*unknown*":relayagent_suboptions[data[i]]);
 					if (i+data[i+1]+2>j+data[j+1]+2) {
-						printf("*malformed - too large*\n");
+						fprintf(g_out,"*malformed - too large*\n");
 						break;
 					}
 					printHexString(data+i+2,data[i+1],16);
@@ -505,23 +558,23 @@ static void print_payload(const uint8_t *data,int data_len,const char *ts,const 
 
 			case 93: // Client System Architecture
 				if (data[j+1]<2)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+3],data[j+3]>=strcountof(client_architecture_names)?"*unknown*":client_architecture_names[data[j+3]]);
+					fprintf(g_out,"%d (%s)",data[j+3],data[j+3]>=strcountof(client_architecture_names)?"*unknown*":client_architecture_names[data[j+3]]);
 				break;
 
 			case 94: // Client Network Interface Identifier
 				if (data[j+1]<3)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
-					printf("%u (Rev %d.%d)",(data[j+3]<<8|data[j+4]),data[j+3],data[j+4]);
+					fprintf(g_out,"%u (Rev %d.%d)",(data[j+3]<<8|data[j+4]),data[j+3],data[j+4]);
 				break;
 
 			case 116: // Auto-Configure
 				if (data[j+1]<1)
-					printf("*malformed - too short*");
+					fprintf(g_out,"*malformed - too short*");
 				else
-					printf("%d (%s)",data[j+2],data[j+2]>=strcountof(auto_configure)?"*unknown*":auto_configure[data[j+2]]);
+					fprintf(g_out,"%d (%s)",data[j+2],data[j+2]>=strcountof(auto_configure)?"*unknown*":auto_configure[data[j+2]]);
 				break;
 
 			case 121: // Classless static route
@@ -530,13 +583,10 @@ static void print_payload(const uint8_t *data,int data_len,const char *ts,const 
 				break;
 
 		}
-		printf("\n");
+		fprintf(g_out,"\n");
 
 		j+=data[j+1]+2;
 	}
-
-	printf("--------------------------------------------------------------------------------\n\n");
-	fflush(stdout);
 } // }}}
 
 void dhcp_hexdump(const uint8_t *buf,int len) { // {{{ full-frame hex dump (the -H output)
@@ -653,16 +703,25 @@ nexthdr:
 	return 1;
 } // }}}
 
-void dhcp_print(const struct dhcp_frame *f,const char *ts) { // {{{ classic verbose dump of a decapsulated frame
+void dhcp_fprint(FILE *out,const struct dhcp_frame *f,const char *ts) { // {{{ verbose dump of a decapsulated frame to out
 	char sip[40],dip[40],smac[40],dmac[40];
 	int i;
 
+	g_out=out;
+
 	if (f->nvlan)
-		printf("  VLAN:");
+		fprintf(g_out,"  VLAN:");
 	for (i=0;i<f->nvlan;i++)
-		printf(" %c:%04u",f->vlan[i].type,f->vlan[i].id);
+		fprintf(g_out," %c:%04u",f->vlan[i].type,f->vlan[i].id);
 	if (f->nvlan)
-		printf("\n");
+		fprintf(g_out,"\n");
+
+	if (f->plen==0)
+		return;
+	if (f->plen<236) { // the fixed BOOTP header (op..file) is 236 bytes
+		fprintf(stderr,"Ignored too short DHCP packet: %d bytes\n",f->plen);
+		return;
+	}
 
 	inet_ntop(AF_INET,&f->srcip,sip,sizeof sip);
 	inet_ntop(AF_INET,&f->dstip,dip,sizeof dip);
@@ -671,5 +730,52 @@ void dhcp_print(const struct dhcp_frame *f,const char *ts) { // {{{ classic verb
 	snprintf(dmac,sizeof dmac,"%02x:%02x:%02x:%02x:%02x:%02x",
 		f->dmac[0],f->dmac[1],f->dmac[2],f->dmac[3],f->dmac[4],f->dmac[5]);
 
-	print_payload(f->payload,f->plen,ts,sip,smac,dip,dmac);
+	fprintf(g_out,"  TIME: %s\n",ts);
+	fprintf(g_out,"    IP: %s (%s) > %s (%s)\n",sip,smac,dip,dmac);
+	print_bootp(f->payload,f->plen);
+	fprintf(g_out,"--------------------------------------------------------------------------------\n\n");
+	fflush(g_out);
+} // }}}
+
+void dhcp_print(const struct dhcp_frame *f,const char *ts) { // {{{ classic verbose dump to stdout
+	dhcp_fprint(stdout,f,ts);
+} // }}}
+
+static void hexdump_c(const uint8_t *data,int len,const char *bar) { // {{{ hexdump -C style dump to g_out; bar is the vertical separator glyph
+	int i,j;
+
+	// like hexdump -C, but the trailing bar is also space padded on the last
+	// partial line so both bars line up vertically across every row
+	for (i=0;i<len;i+=16) {
+		fprintf(g_out,"%08x ",i);
+		for (j=0;j<16;j++) {
+			if (j%8==0)
+				fprintf(g_out," ");
+			if (i+j<len)
+				fprintf(g_out,"%02x ",data[i+j]);
+			else
+				fprintf(g_out,"   ");
+		}
+		fprintf(g_out," %s",bar);
+		for (j=0;j<16;j++) {
+			if (i+j<len) {
+				unsigned char c=data[i+j];
+
+				fprintf(g_out,"%c",isprint(c)?c:'.');
+			} else
+				fprintf(g_out," ");
+		}
+		fprintf(g_out,"%s\n",bar);
+	}
+} // }}}
+
+void dhcp_fprint_payload(FILE *out,const uint8_t *data,int data_len,const char *bar) { // {{{ decode + hex dump of a DHCP payload (TUI packet detail)
+	g_out=out;
+	if (data_len<236) {
+		fprintf(g_out,"*truncated - %d bytes*\n",data_len);
+		return;
+	}
+	print_bootp(data,data_len);
+	fprintf(g_out,"\n");
+	hexdump_c(data,data_len,bar?bar:"|");
 } // }}}

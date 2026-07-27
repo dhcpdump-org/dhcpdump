@@ -3,6 +3,28 @@ Parse DHCP packets from a network interface
 
 This fork of `dhcpdump` 1.8 by Edwin Groothuis, edwin@mavetju.org (http://www.mavetju.org) collects in a single place bug-fixes and improvements collected over the last 10+ years.
 
+## Version 2.00pre1 (unreleased)
+
+* Add an interactive session-tracking TUI (`-t`)
+* The TUI depends on [yascreen](https://github.com/bbonev/yascreen)
+* Split packet parsing into a reusable decoder library separate from the CLI front end
+* Fix VLAN (802.1Q) and QinQ (802.1ad) tagged DHCP
+* The TUI is optional by `make NO_TUI=1`
+
+### Session tracking
+
+Run with `-t` for a full-screen, colour coded view that groups traffic into DHCP
+sessions by client, and within each client into transactions by XID. Every
+transaction shows its message flow (DISCOVER, OFFER, REQUEST, ACK, ...) and a
+derived state: waiting for a reply, offered, complete/bound, NAK, or timed out.
+It works both live (`-i`) and while browsing a capture (`-r`). See the manual
+page for the full list of keys.
+
+## Version 1.11 (unreleased, tagged)
+
+* This tag keeps the last version that does not have TUI and does not depend on [yascreen](https://github.com/bbonev/yascreen)
+* Harden the option parser against out-of-bounds reads and a stack overflow on crafted packets
+
 ## Changes since 1.8
 
 * Fix the DHCP flags calculation

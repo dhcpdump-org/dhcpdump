@@ -5,16 +5,16 @@
 #include <time.h>
 #include <regex.h>
 #include <stdio.h>
-#include <signal.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/time.h>
-#include <arpa/inet.h>
 
-#include "dhcp.h"
 #include "version.h"
-#include "session.h"
 #include "dhcpdump.h"
+#ifndef NO_TUI
+#include "tui.h"
+#include "session.h"
+#endif
 
 // }}}
 
@@ -31,6 +31,12 @@
 #define DHCPFILTER "ip and udp and (src port bootpc or bootps) and (dst port bootpc or bootps)"
 #define CAPFILTER "(" DHCPFILTER ") or (vlan and ((" DHCPFILTER ") or (vlan and (" DHCPFILTER "))))"
 
+#ifdef NO_TUI // built without the -t TUI (see NO_TUI in the Makefile)
+#define TUIOPT ""
+#else
+#define TUIOPT " [-t]"
+#endif
+
 // }}}
 
 // {{{ globals
@@ -39,26 +45,21 @@ char errbuf[PCAP_ERRBUF_SIZE];
 char *hmask=NULL; // -h, MAC address filter regexp (NULL if unset)
 regex_t preg; // compiled hmask
 int dohexdump=0; // -H, dump whole packet contents for debug
-int tuimode=0; // -t, track sessions instead of dumping each packet
-pcap_t *cap=NULL; // capture handle (file scope so the signal handler can stop it)
-struct sess_model model; // session tracker, used in -t mode
+int tuimode=0; // -t, track sessions in the interactive TUI
 
 // }}}
-
-static void on_stop(int sig __attribute__((unused))) { // {{{ break out of pcap_loop on SIGINT/SIGTERM
-	if (cap)
-		pcap_breakloop(cap);
-} // }}}
 
 static inline int usage(const char *me) { // {{{
 	printf("dhcpdump "VERSION"\n");
 	printf("  Usage:\n");
-	printf("    %s -i <interface> [-h <macaddress>] [-H]\n",me);
-	printf("    %s -r <pcapfile>  [-h <macaddress>] [-H]\n",me);
+	printf("    %s -i <interface> [-h <macaddress>] [-H]" TUIOPT "\n",me);
+	printf("    %s -r <pcapfile>  [-h <macaddress>] [-H]" TUIOPT "\n",me);
 	printf("  Options:\n");
 	printf("    -h regexp filter by <macaddress>\n");
 	printf("    -H prints whole packet hex dump\n");
+#ifndef NO_TUI
 	printf("    -t track DHCP sessions and their transactions\n");
+#endif
 	return 0;
 } // }}}
 
@@ -79,33 +80,27 @@ static inline int check_ch(const uint8_t *data,int data_len) { // {{{ check for 
 	return regexec(&preg,ch_ip,0,NULL,0);
 } // }}}
 
-static void pcap_callback(uint8_t *user __attribute__((unused)),const struct pcap_pkthdr *h,const uint8_t *sp) { // {{{
+#ifndef NO_TUI
+static int tui_keep(const uint8_t *data,int data_len) { // {{{ TUI ingest filter: keep only packets passing the -h mask
+	return !(hmask&&check_ch(data,data_len));
+} // }}}
+#endif
+
+static void pcap_callback(uint8_t *user __attribute__((unused)),const struct pcap_pkthdr *h,const uint8_t *sp) { // {{{ classic per-packet line dump
 	struct dhcp_frame f;
 	char timestamp[40];
 	struct timeval tp;
 
-	if (dohexdump&&!tuimode) {
+	if (dohexdump) {
 		dhcp_hexdump(sp,h->caplen);
 		printf("\n");
 	}
 
-	if (!dhcp_decap(sp,h->caplen,&f,tuimode?NULL:stderr))
+	if (!dhcp_decap(sp,h->caplen,&f,stderr))
 		return;
 
 	if (hmask&&check_ch(f.payload,f.plen))
 		return;
-
-	if (tuimode) { // feed the session tracker; use the captured time, not wall clock
-		struct dhcp_msg m;
-
-		if (dhcp_parse(f.payload,f.plen,&m)) {
-			m.ts=h->ts;
-			m.srcip=ntohl(f.srcip);
-			m.dstip=ntohl(f.dstip);
-			sess_ingest(&model,&m);
-		}
-		return;
-	}
 
 	gettimeofday(&tp,NULL);
 	strftime(timestamp,sizeof timestamp,"%Y-%m-%d %H:%M:%S.",localtime(&(tp.tv_sec)));
@@ -118,6 +113,7 @@ int main(int argc,char **argv) { // {{{
 	struct bpf_program fp;
 	char *interface=NULL;
 	char *pcapfile=NULL;
+	pcap_t *cap;
 	int i;
 
 	for (i=1;i<argc;i++) {
@@ -130,8 +126,13 @@ int main(int argc,char **argv) { // {{{
 				dohexdump=1;
 				break;
 			case 't':
+#ifndef NO_TUI
 				tuimode=1;
 				break;
+#else
+				fprintf(stderr,"%s: built without TUI support (-t)\n",argv[0]);
+				return usage(argv[0]);
+#endif
 			case 'h':
 				dst=&hmask;
 				break;
@@ -177,27 +178,23 @@ int main(int argc,char **argv) { // {{{
 		if ((cap=pcap_open_offline(pcapfile,errbuf))==NULL)
 			errx(1,"pcap_open_offline(): %s",errbuf);
 	}
-	if (pcap_compile(cap,&fp,CAPFILTER,0,0)<0)
+	if (pcap_compile(cap,&fp,CAPFILTER,1,0)<0) // optimize: the nested VLAN filter is 236 insns unoptimized, 45 optimized
 		errx(1,"pcap_compile: %s",pcap_geterr(cap));
 	if (pcap_setfilter(cap,&fp)<0)
 		errx(1,"pcap_setfilter: %s",pcap_geterr(cap));
 	pcap_freecode(&fp);
 
+#ifndef NO_TUI
 	if (tuimode) {
+		struct sess_model model;
+
 		sess_model_init(&model,SESS_TIMEOUT_MS);
-		signal(SIGINT,on_stop); // let ^C end a live capture and print the summary
-		signal(SIGTERM,on_stop);
-	}
-
-	// pcap_loop returns 0 at EOF (offline) and -2 on pcap_breakloop (our stop);
-	// only -1 is a real error.
-	if (pcap_loop(cap,0,pcap_callback,NULL)==-1)
-		errx(1,"pcap_loop(%s): %s",interface?interface:pcapfile,pcap_geterr(cap));
-
-	if (tuimode) {
-		sess_dump(&model,stdout);
+		tui_run(cap,&model,interface!=NULL,tui_keep);
 		sess_model_free(&model);
-	}
+	} else
+#endif
+	if (pcap_loop(cap,0,pcap_callback,NULL)==-1) // offline EOF returns 0, only -1 is an error
+		errx(1,"pcap_loop(%s): %s",interface?interface:pcapfile,pcap_geterr(cap));
 
 	pcap_close(cap);
 

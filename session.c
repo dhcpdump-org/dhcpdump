@@ -32,13 +32,29 @@ static struct timeval tv_add_ms(struct timeval t,int ms) { // {{{
 
 // {{{ free helpers
 
+static uint8_t *raw_dup(const uint8_t *src,int len) { // {{{ copy a raw payload, NULL on failure/empty
+	uint8_t *p;
+
+	if (!src||len<=0)
+		return NULL;
+	p=malloc(len);
+	if (p)
+		memcpy(p,src,len);
+	return p;
+} // }}}
+
+static void msg_free(struct sess_msg *mm) { // {{{
+	free(mm->raw);
+	free(mm);
+} // }}}
+
 static void tx_free(struct sess_tx *tx) { // {{{
 	struct sess_msg *mm=tx->msgs;
 
 	while (mm) {
 		struct sess_msg *n=mm->next;
 
-		free(mm);
+		msg_free(mm);
 		mm=n;
 	}
 	free(tx);
@@ -98,37 +114,35 @@ static void sess_unlink(struct sess_model *m,struct sess *s) { // {{{
 		m->tail=s->prev;
 } // }}}
 
-static void sess_push_front(struct sess_model *m,struct sess *s) { // {{{
-	s->prev=NULL;
-	s->next=m->head;
-	if (m->head)
-		m->head->prev=s;
-	m->head=s;
-	if (!m->tail)
-		m->tail=s;
+static void sess_push_tail(struct sess_model *m,struct sess *s) { // {{{ append, keeping a stable first-seen order
+	s->next=NULL;
+	s->prev=m->tail;
+	if (m->tail)
+		m->tail->next=s;
+	m->tail=s;
+	if (!m->head)
+		m->head=s;
 } // }}}
 
-static void sess_evict_lru(struct sess_model *m) { // {{{ drop the least recently active client
-	struct sess *t=m->tail;
+static void sess_evict_lru(struct sess_model *m) { // {{{ drop the least recently active client without reordering the rest
+	struct sess *s,*lru=m->head;
 
-	if (!t)
+	if (!lru)
 		return;
-	sess_unlink(m,t);
+	for (s=m->head->next;s;s=s->next)
+		if (tv_cmp(&s->last,&lru->last)<0)
+			lru=s;
+	sess_unlink(m,lru);
 	m->nsess--;
-	sess_free_one(t);
+	sess_free_one(lru);
 } // }}}
 
 static struct sess *sess_find_or_new(struct sess_model *m,const struct dhcp_msg *msg) { // {{{
 	struct sess *s;
 
 	for (s=m->head;s;s=s->next)
-		if (same_client(s,msg)) {
-			if (s!=m->head) { // move to front (most recently active)
-				sess_unlink(m,s);
-				sess_push_front(m,s);
-			}
+		if (same_client(s,msg)) // updated in place, list order stays stable
 			return s;
-		}
 
 	s=calloc(1,sizeof *s);
 	if (!s)
@@ -137,7 +151,8 @@ static struct sess *sess_find_or_new(struct sess_model *m,const struct dhcp_msg 
 	s->hlen=msg->hlen;
 	s->htype=msg->htype;
 	s->first=msg->ts;
-	sess_push_front(m,s);
+	s->last=msg->ts; // so a brand new client is not the LRU pick below
+	sess_push_tail(m,s);
 	m->nsess++;
 	while (m->nsess>SESS_MAX)
 		sess_evict_lru(m);
@@ -180,15 +195,33 @@ static struct sess_tx *tx_find_or_new(struct sess *s,const struct dhcp_msg *msg)
 	return tx;
 } // }}}
 
-static void tx_add_msg(struct sess_tx *tx,const struct dhcp_msg *msg) { // {{{ append oldest first
-	struct sess_msg *mm=calloc(1,sizeof *mm);
+static void tx_add_msg(struct sess_tx *tx,const struct dhcp_msg *msg) { // {{{ append oldest first, collapsing retransmissions
+	struct sess_msg *mm;
 
+	// a retransmission (same type, direction and server as the last message)
+	// bumps a counter instead of piling up identical nodes
+	if (tx->msgs_tail&&tx->msgs_tail->msgtype==msg->msgtype
+			&&tx->msgs_tail->op==msg->op
+			&&tx->msgs_tail->serverid==msg->serverid) {
+		tx->msgs_tail->count++;
+		tx->msgs_tail->ts=msg->ts;
+		free(tx->msgs_tail->raw); // keep the latest retransmission's packet
+		tx->msgs_tail->raw=raw_dup(msg->raw,msg->rawlen);
+		tx->msgs_tail->rawlen=tx->msgs_tail->raw?msg->rawlen:0;
+		return;
+	}
+
+	mm=calloc(1,sizeof *mm);
 	if (!mm)
 		return;
 	mm->ts=msg->ts;
 	mm->srcip=msg->srcip;
+	mm->serverid=msg->serverid;
 	mm->msgtype=msg->msgtype;
 	mm->op=msg->op;
+	mm->count=1;
+	mm->raw=raw_dup(msg->raw,msg->rawlen);
+	mm->rawlen=mm->raw?msg->rawlen:0;
 	if (tx->msgs_tail)
 		tx->msgs_tail->next=mm;
 	else
@@ -203,7 +236,7 @@ static void tx_add_msg(struct sess_tx *tx,const struct dhcp_msg *msg) { // {{{ a
 		tx->msgs=old->next;
 		if (tx->msgs_tail==old)
 			tx->msgs_tail=NULL;
-		free(old);
+		msg_free(old);
 		tx->nmsg--;
 	}
 } // }}}
@@ -239,6 +272,11 @@ void sess_ingest(struct sess_model *m,const struct dhcp_msg *msg) { // {{{
 			tx->deadline=tv_add_ms(msg->ts,m->timeout_ms);
 			break;
 		case DHCPREQUEST:
+			if (msg->serverid) // the client commits to this server
+				tx->selected_server=msg->serverid;
+			tx->awaiting=DHCPACK;
+			tx->deadline=tv_add_ms(msg->ts,m->timeout_ms);
+			break;
 		case DHCPINFORM:
 			tx->awaiting=DHCPACK;
 			tx->deadline=tv_add_ms(msg->ts,m->timeout_ms);
@@ -278,69 +316,3 @@ enum tx_state sess_tx_state(const struct sess_tx *tx,const struct timeval *now) 
 	}
 	return TX_OFFERED;
 } // }}}
-
-// {{{ text dump (temporary, until the TUI lands)
-
-static const char *state_name(enum tx_state st) { // {{{
-	switch (st) {
-		case TX_WAIT: return "wait";
-		case TX_OFFERED: return "offered";
-		case TX_COMPLETE: return "complete";
-		case TX_NAK: return "NAK";
-		case TX_TIMEOUT: return "timeout";
-	}
-	return "?";
-} // }}}
-
-static void fmt_mac(FILE *out,const uint8_t *mac,int len) { // {{{
-	int i;
-
-	if (len<=0||len>16)
-		len=6;
-	for (i=0;i<len;i++)
-		fprintf(out,"%s%02x",i?":":"",mac[i]);
-} // }}}
-
-static void fmt_ip(FILE *out,uint32_t ip) { // {{{
-	fprintf(out,"%u.%u.%u.%u",(ip>>24)&255,(ip>>16)&255,(ip>>8)&255,ip&255);
-} // }}}
-
-void sess_dump(const struct sess_model *m,FILE *out) { // {{{
-	const struct sess *s;
-
-	fprintf(out,"=== %d client(s) ===\n",m->nsess);
-	for (s=m->head;s;s=s->next) {
-		const struct sess_tx *tx;
-
-		fprintf(out,"CLIENT ");
-		fmt_mac(out,s->chaddr,s->hlen);
-		fprintf(out,"  htype %u",s->htype);
-		if (s->hostname[0])
-			fprintf(out,"  host \"%s\"",s->hostname);
-		if (s->lease_ip) {
-			fprintf(out,"  lease ");
-			fmt_ip(out,s->lease_ip);
-		}
-		if (s->server_ip) {
-			fprintf(out,"  server ");
-			fmt_ip(out,s->server_ip);
-		}
-		fprintf(out,"  (%d tx, last %s)\n",s->ntx,dhcp_msgtype_name(s->last_msgtype));
-
-		for (tx=s->txs;tx;tx=tx->next) {
-			const struct sess_msg *mm;
-
-			fprintf(out,"  XID %08x  %-9s",tx->xid,state_name(sess_tx_state(tx,&m->now)));
-			if (tx->yiaddr) {
-				fprintf(out,"  ");
-				fmt_ip(out,tx->yiaddr);
-			}
-			fprintf(out,"\n    ");
-			for (mm=tx->msgs;mm;mm=mm->next)
-				fprintf(out,"%s%s",mm==tx->msgs?"":" -> ",dhcp_msgtype_name(mm->msgtype));
-			fprintf(out,"\n");
-		}
-	}
-} // }}}
-
-// }}}

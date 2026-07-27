@@ -37,6 +37,8 @@
 
 struct dhcp_msg {
 	struct timeval ts; // capture time; set by the caller, not by dhcp_parse
+	const uint8_t *raw; // DHCP payload; set by the caller for a raw copy to be kept
+	int rawlen; // length of raw
 	uint32_t srcip; // L3 source, host order; set by the caller
 	uint32_t dstip; // L3 destination, host order; set by the caller
 	uint8_t op; // BOOTREQUEST / BOOTREPLY
