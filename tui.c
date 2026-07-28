@@ -613,8 +613,12 @@ static void draw_detail(struct sess *s,int x,int y,int w,int h,const struct time
 				break;
 			}
 	if (cursor>=0) { // keep the cursor visible
-		if (cursor<detail_top)
-			detail_top=cursor;
+		int first=cursor;
+
+		while (first>0&&!drows[first-1].msg) // the cursor lands only on selectable rows; scrolling up must also reveal the non-selectable rows just above it
+			first--;
+		if (first<detail_top)
+			detail_top=first;
 		if (cursor>=detail_top+h)
 			detail_top=cursor-h+1;
 	}
