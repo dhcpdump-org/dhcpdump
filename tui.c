@@ -40,7 +40,7 @@ static volatile sig_atomic_t f_winch=1; // pending resize (1 forces initial layo
 static volatile sig_atomic_t f_stop=0; // quit requested
 enum { FOCUS_LIST,FOCUS_DETAIL }; // which pane the keyboard drives
 
-static int layout=LAYOUT_HSPLIT; // current split, toggled with TAB
+static int layout=LAYOUT_HSPLIT; // current split, toggled with v/V
 static int focus=FOCUS_LIST; // active pane
 static int help_active=0; // help dialog is shown
 static int detail_top=0; // first row shown in the detail pane (line scroll)
@@ -689,9 +689,9 @@ static void render(struct sess_model *m,int live,int *top) { // {{{
 	}
 
 	if (focus==FOCUS_DETAIL)
-		snprintf(left,sizeof left," q quit  %s/%s packet  %s open  %s back  TAB layout  ? help",A_UP,A_DN,A_RT,A_LT);
+		snprintf(left,sizeof left," q quit  %s/%s packet  %s open  %s back  v layout  ? help",A_UP,A_DN,A_RT,A_LT);
 	else
-		snprintf(left,sizeof left," q quit  %s/%s clients  %s packets  TAB layout  ? help",A_UP,A_DN,A_RT);
+		snprintf(left,sizeof left," q quit  %s/%s clients  %s packets  v layout  ? help",A_UP,A_DN,A_RT);
 	snprintf(right,sizeof right,"%d/%d ",m->nsess?selidx+1:0,m->nsess);
 	draw_bar(sy-1,sx,left,right);
 } // }}}
@@ -957,15 +957,17 @@ static void draw_help(int sx,int sy) { // {{{ centered dialog listing the keys f
 		snprintf(keys[n],sizeof keys[0],"g / G");                   snprintf(desc[n++],sizeof desc[0],"first / last");
 		snprintf(keys[n],sizeof keys[0],"%s, Enter",A_RT);          snprintf(desc[n++],sizeof desc[0],"open full decode");
 		snprintf(keys[n],sizeof keys[0],"%s, Esc, Backspace",A_LT); snprintf(desc[n++],sizeof desc[0],"back to the client list");
+		snprintf(keys[n],sizeof keys[0],"Tab, Shift-Tab");          snprintf(desc[n++],sizeof desc[0],"to the client list");
 	} else {
 		title=" client list ";
 		snprintf(keys[n],sizeof keys[0],"%s / %s  j / k",A_UP,A_DN);snprintf(desc[n++],sizeof desc[0],"select client");
 		snprintf(keys[n],sizeof keys[0],"PgUp / PgDn");             snprintf(desc[n++],sizeof desc[0],"page");
 		snprintf(keys[n],sizeof keys[0],"g / G");                   snprintf(desc[n++],sizeof desc[0],"first / last");
 		snprintf(keys[n],sizeof keys[0],"%s, Enter",A_RT);          snprintf(desc[n++],sizeof desc[0],"view its packets");
+		snprintf(keys[n],sizeof keys[0],"Tab, Shift-Tab");          snprintf(desc[n++],sizeof desc[0],"to the detail pane");
 	}
 	keys[n][0]=0; desc[n++][0]=0; // blank separator
-	snprintf(keys[n],sizeof keys[0],"TAB");                     snprintf(desc[n++],sizeof desc[0],"switch layout");
+	snprintf(keys[n],sizeof keys[0],"v, V");                    snprintf(desc[n++],sizeof desc[0],"switch layout");
 	snprintf(keys[n],sizeof keys[0],"u / a");                   snprintf(desc[n++],sizeof desc[0],"UTF-8 / ASCII glyphs");
 	snprintf(keys[n],sizeof keys[0],"Ctrl-L");                  snprintf(desc[n++],sizeof desc[0],"redraw the screen");
 	snprintf(keys[n],sizeof keys[0],"h, H, ?, F1");             snprintf(desc[n++],sizeof desc[0],"toggle this help");
@@ -1149,8 +1151,33 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 				continue;
 			}
 
-			if (ch=='\t'||ch==YAS_K_TAB) { // toggle layout (list/detail only; not in the packet view above)
+			if (ch=='v'||ch=='V') { // toggle layout (list/detail only; not in the packet view above)
 				layout=layout==LAYOUT_VSPLIT?LAYOUT_HSPLIT:LAYOUT_VSPLIT;
+				continue;
+			}
+			if (ch=='\t'||ch==YAS_K_TAB||ch==YAS_K_S_TAB) { // switch to the other pane (list/detail only; a no-op in the packet view above)
+				if (focus==FOCUS_DETAIL)
+					focus=FOCUS_LIST;
+				else {
+					cs=cur_sel(m,NULL);
+					if (cs) {
+						ov_build(cs);
+						if (ov_n>0) {
+							int found=0;
+
+							for (i=0;i<ov_n;i++)
+								if (ov_list[i]==sel_msg) {
+									found=1;
+									break;
+								}
+							focus=FOCUS_DETAIL;
+							if (!found) { // a different client since last time: start at its first packet
+								sel_msg=ov_list[0];
+								detail_top=0;
+							}
+						}
+					}
+				}
 				continue;
 			}
 			if (ch==YAS_K_C_L) { // ^L: force redraw

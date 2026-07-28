@@ -70,7 +70,7 @@ The following keys are available:
 
 =item B<h>, B<H>, B<?>, B<F1> - toggle a help dialog listing the keys for the current pane
 
-=item B<TAB> - toggle between side-by-side and top/bottom layouts
+=item B<v>, B<V> - toggle between side-by-side and top/bottom layouts
 
 =item B<u> / B<a> - use UTF-8 box glyphs / plain ASCII
 
@@ -88,6 +88,8 @@ In the client list:
 
 =item B<Right>, B<Enter> - move into the detail pane
 
+=item B<Tab>, B<Shift-Tab> - move into the detail pane
+
 =back
 
 In the detail pane:
@@ -97,6 +99,8 @@ In the detail pane:
 =item B<j> / B<k>, B<Down> / B<Up>, B<PgUp> / B<PgDn> - select a packet
 
 =item B<Left>, B<Esc>, B<Backspace> - back to the client list
+
+=item B<Tab>, B<Shift-Tab> - back to the client list
 
 =item B<Right>, B<Enter> - open the full decode of the selected packet
 
