@@ -44,6 +44,7 @@ static int layout=LAYOUT_HSPLIT; // current split, toggled with v/V
 static int focus=FOCUS_LIST; // active pane
 static int help_active=0; // help dialog is shown
 static int detail_top=0; // first row shown in the detail pane (line scroll)
+static int detail_h=0; // detail pane height as last drawn (0 when the pane is not on screen)
 
 // the message selected in the detail pane; also the packet shown in the overlay.
 // tracked by pointer so it stays put as new packets shift indices around it.
@@ -214,6 +215,9 @@ static void on_msg_evict(const struct sess_msg *mm,void *user __attribute__((unu
 		if (ov_list[i]!=mm)
 			ov_list[j++]=ov_list[i];
 	ov_n=j;
+	for (i=0;i<ndrows;i++) // and scrub the detail rows, detail_move reads them between frames
+		if (drows[i].msg==mm)
+			drows[i].msg=NULL;
 } // }}}
 
 static void set_sel(const struct sess *s) { // {{{
@@ -605,6 +609,7 @@ static void draw_detail(struct sess *s,int x,int y,int w,int h,const struct time
 	}
 
 	build_detail_rows(s,now);
+	detail_h=h; // remembered for the keypress-driven line scroll in detail_move
 
 	if (active) // locate the cursor row
 		for (i=0;i<ndrows;i++)
@@ -613,12 +618,8 @@ static void draw_detail(struct sess *s,int x,int y,int w,int h,const struct time
 				break;
 			}
 	if (cursor>=0) { // keep the cursor visible
-		int first=cursor;
-
-		while (first>0&&!drows[first-1].msg) // the cursor lands only on selectable rows; scrolling up must also reveal the non-selectable rows just above it
-			first--;
-		if (first<detail_top)
-			detail_top=first;
+		if (cursor<detail_top)
+			detail_top=cursor;
 		if (cursor>=detail_top+h)
 			detail_top=cursor-h+1;
 	}
@@ -663,6 +664,7 @@ static void render(struct sess_model *m,int live,int *top) { // {{{
 	sel=cur_sel(m,&selidx);
 	ov_build(sel); // flat message list, used by the detail cursor and the overlay
 
+	detail_h=0; // set again in draw_detail when the pane is actually drawn
 	cy=1; // content rows 1 .. sy-2
 	ch=sy-2;
 	if (ch>=1) {
@@ -737,6 +739,59 @@ static void msg_move(int dir) { // {{{ move the detail/packet cursor by dir with
 			idx=ov_n-1;
 	}
 	sel_msg=ov_n>0?ov_list[idx]:NULL;
+} // }}}
+
+static void detail_move(int dir) { // {{{ move the detail cursor by one; scroll a single line per keypress over non-selectable rows
+	int i,c=-1;
+
+	if (detail_h<1) { // detail pane not on screen: plain cursor move
+		msg_move(dir);
+		return;
+	}
+	for (i=0;i<ndrows;i++)
+		if (drows[i].msg&&drows[i].msg==sel_msg) {
+			c=i;
+			break;
+		}
+	if (c<0) {
+		msg_move(dir);
+		return;
+	}
+	if (dir<0) {
+		int p=-1;
+
+		for (i=c-1;i>=0;i--)
+			if (drows[i].msg) {
+				p=i;
+				break;
+			}
+		if (p>=0&&p>=detail_top) { // previous selectable row already visible: just move to it
+			sel_msg=drows[p].msg;
+			return;
+		}
+		if (detail_top>0) { // hidden above: scroll a single line, select it only once it shows
+			detail_top--;
+			if (p==detail_top)
+				sel_msg=drows[p].msg;
+		}
+	} else {
+		int nx=-1;
+
+		for (i=c+1;i<ndrows;i++)
+			if (drows[i].msg) {
+				nx=i;
+				break;
+			}
+		if (nx>=0&&nx<detail_top+detail_h) { // next selectable row already visible: just move to it
+			sel_msg=drows[nx].msg;
+			return;
+		}
+		if (detail_top<ndrows-detail_h) { // hidden below: scroll a single line, select it only once it shows
+			detail_top++;
+			if (nx>=0&&nx<detail_top+detail_h)
+				sel_msg=drows[nx].msg;
+		}
+	}
 } // }}}
 
 static int draw_text(int x,int y,int w,int h,const char *text,int top,int hoff) { // {{{ draw lines [top,top+h), skipping hoff columns; return line count
@@ -1198,18 +1253,19 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 						ov_scroll=0;
 					}
 				} else if (ch==YAS_K_UP||ch=='k')
-					msg_move(-1);
+					detail_move(-1);
 				else if (ch==YAS_K_DOWN||ch=='j')
-					msg_move(1);
+					detail_move(1);
 				else if (ch==YAS_K_PGUP)
 					for (i=0;i<page;i++)
 						msg_move(-1);
 				else if (ch==YAS_K_PGDN)
 					for (i=0;i<page;i++)
 						msg_move(1);
-				else if ((ch=='g'||ch==YAS_K_HOME)&&ov_n>0)
+				else if ((ch=='g'||ch==YAS_K_HOME)&&ov_n>0) {
 					sel_msg=ov_list[0];
-				else if ((ch=='G'||ch==YAS_K_END)&&ov_n>0)
+					detail_top=0; // jump to the very top, headers included
+				} else if ((ch=='G'||ch==YAS_K_END)&&ov_n>0)
 					sel_msg=ov_list[ov_n-1];
 				continue;
 			}
