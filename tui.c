@@ -38,6 +38,7 @@ enum { LAYOUT_VSPLIT,LAYOUT_HSPLIT }; // side by side / top and bottom
 static yascreen *scr=NULL;
 static volatile sig_atomic_t f_winch=1; // pending resize (1 forces initial layout)
 static volatile sig_atomic_t f_stop=0; // quit requested
+static volatile sig_atomic_t f_cont=0; // resumed after a suspend
 enum { FOCUS_LIST,FOCUS_DETAIL }; // which pane the keyboard drives
 
 static int layout=LAYOUT_HSPLIT; // current split, toggled with v/V
@@ -102,6 +103,10 @@ static void on_winch(int sig __attribute__((unused))) {
 
 static void on_stop(int sig __attribute__((unused))) {
 	f_stop=1;
+}
+
+static void on_cont(int sig __attribute__((unused))) {
+	f_cont=1;
 }
 
 // }}}
@@ -1127,6 +1132,7 @@ static void draw_help(int sx,int sy) { // {{{ centered dialog listing the keys f
 	snprintf(keys[n],sizeof keys[0],"v, V");                    snprintf(desc[n++],sizeof desc[0],"switch layout");
 	snprintf(keys[n],sizeof keys[0],"u / a");                   snprintf(desc[n++],sizeof desc[0],"UTF-8 / ASCII glyphs");
 	snprintf(keys[n],sizeof keys[0],"Ctrl-L");                  snprintf(desc[n++],sizeof desc[0],"redraw the screen");
+	snprintf(keys[n],sizeof keys[0],"Ctrl-Z");                  snprintf(desc[n++],sizeof desc[0],"suspend");
 	snprintf(keys[n],sizeof keys[0],"h, H, ?, F1");             snprintf(desc[n++],sizeof desc[0],"toggle this help");
 	snprintf(keys[n],sizeof keys[0],"q, Ctrl-C");               snprintf(desc[n++],sizeof desc[0],"quit");
 
@@ -1198,6 +1204,7 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 	signal(SIGWINCH,on_winch);
 	signal(SIGINT,on_stop);
 	signal(SIGTERM,on_stop);
+	signal(SIGCONT,on_cont);
 
 	while (!f_stop) {
 		fd_set r;
@@ -1205,6 +1212,13 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 		uint64_t essto;
 		int fdmax,nn,ch;
 
+		if (f_cont) { // resumed after a suspend: reenter raw mode and the alternate screen
+			yascreen_term_set(scr,YAS_NOBUFF|YAS_NOSIGN|YAS_NOECHO);
+			yascreen_altbuf(scr,1);
+			yascreen_cursor(scr,0);
+			f_cont=0;
+			f_winch=1; // the window may have been resized while stopped
+		}
 		if (f_winch) {
 			yascreen_resize(scr,0,0);
 			yascreen_redraw(scr);
@@ -1269,6 +1283,13 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 			if (ch=='u'||ch=='a') { // toggle UTF-8 box glyphs / ASCII
 				unicode=ch=='u';
 				yascreen_set_unicode(scr,unicode);
+				continue;
+			}
+			if (ch==YAS_K_C_Z) { // suspend from anywhere; ISIG is off, so the stop is raised by hand after handing the terminal back
+				yascreen_altbuf(scr,0);
+				yascreen_cursor(scr,1);
+				yascreen_term_restore(scr);
+				kill(getpid(),SIGTSTP); // on_cont reenters the TUI when resumed
 				continue;
 			}
 

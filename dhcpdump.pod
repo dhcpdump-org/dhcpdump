@@ -76,6 +76,8 @@ The following keys are available:
 
 =item B<Ctrl-L> - redraw the screen
 
+=item B<Ctrl-Z> - suspend; resume with the shell's job control (fg)
+
 =back
 
 In the client list:
