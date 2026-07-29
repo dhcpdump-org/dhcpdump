@@ -80,7 +80,7 @@ scan:
 
 dhcpdump.8: dhcpdump.pod Makefile
 	pod2man --section 8 \
-		--date "23 June 2008" \
+		--date "29 July 2026" \
 		--name "DHCPDUMP" \
 		--center "User Contributed Software" \
 		dhcpdump.pod dhcpdump.8
@@ -94,10 +94,10 @@ main.o: main.c dhcpdump.h tui.h session.h version.h Makefile
 dhcpdump.o: dhcpdump.c dhcpdump.h dhcp_options.h version.h Makefile
 	${CC} ${CFLAGS} -c -o $@ dhcpdump.c
 
-dhcp.o: dhcp.c dhcp.h Makefile
+dhcp.o: dhcp.c dhcp.h dhcpdump.h Makefile
 	${CC} ${CFLAGS} -c -o $@ dhcp.c
 
-session.o: session.c session.h dhcp.h Makefile
+session.o: session.c session.h dhcp.h dhcpdump.h Makefile
 	${CC} ${CFLAGS} -c -o $@ session.c
 
 tui.o: tui.c tui.h dhcp.h session.h dhcpdump.h version.h Makefile

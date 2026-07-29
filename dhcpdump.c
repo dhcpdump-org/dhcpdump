@@ -27,8 +27,8 @@
 
 #define OPTVALCOL 44 // column where option values (and their wrapped continuations) sit; matches printHex
 #define OPTWRAPCOL 78 // hard wrap column for string values; matches the width of a hex dump line
-#define OPTLISTCOL 12 // indent for multi value lists, one item per line under the option header
-#define OPTHEXCOL 28 // indent for hex+ascii block values; 28+32 hex digits+1 space puts the ascii at column 61, same as in a hex dump line
+#define OPTLISTCOL 18 // indent for multi line lists, one item per line under the option header; right of the option names so the items read as nested
+#define OPTHEXCOL 9 // indent for hex+ascii block values: the width of the hex dump's address column, so an option block renders like the trailing hex dump with the address blanked and aligns with it
 
 // Header geometry, used instead of the layout of struct ether_header/ip/udphdr.
 // A captured frame is only byte aligned, so those structs must never be cast
@@ -63,23 +63,20 @@
 // before the helpers below run, so the same code renders to stdout (line dump)
 // or to a memory stream (TUI packet detail).
 static FILE *g_out;
+// Bar glyph around the ascii columns of hex dumps and hex+ascii blocks; set
+// together with g_out (the TUI passes a box drawing glyph in UTF-8 mode).
+static const char *g_bar="|";
+// Whether to tag the generated <overloaded> sname/file marker with a leading
+// \1 byte. Packet data can never render a control byte (is_printable diverts
+// it to a hex block), so the tag lets the TUI colour only the genuine marker
+// and leave a crafted literal "<overloaded>" field value alone. Off for the
+// line dump, whose output must stay free of control bytes.
+static int g_ovmark=0;
 
 static const uint8_t dhcp_cookie[4]={99,130,83,99}; // RFC 2131 magic cookie, marks the start of the option list
 
 static inline void printIPaddress(const uint8_t *data) { // {{{ print the data as an IP address
 	fprintf(g_out,"%u.%u.%u.%u",data[0],data[1],data[2],data[3]);
-} // }}}
-
-static inline void printIPaddressAddress(const uint8_t *data) { // {{{ print the data as an IP address and an IP address
-	fprintf(g_out,"%u.%u.%u.%u %u.%u.%u.%u",
-		data[0],data[1],data[2],data[3],
-		data[4],data[5],data[6],data[7]);
-} // }}}
-
-static inline void printIPaddressMask(const uint8_t *data) { // {{{ print the data as an IP address and mask
-	fprintf(g_out,"%u.%u.%u.%u/%u.%u.%u.%u",
-		data[0],data[1],data[2],data[3],
-		data[4],data[5],data[6],data[7]);
 } // }}}
 
 static inline void print8bits(const uint8_t *data) { // {{{ prints a value of 8 bits (1 byte)
@@ -129,23 +126,35 @@ static inline void printTime32(const uint8_t *data) { // {{{ print the data as a
 	printTimeVal(((uint32_t)data[0]<<24)|((uint32_t)data[1]<<16)|((uint32_t)data[2]<<8)|data[3]);
 } // }}}
 
-static inline void printHexBlock(const uint8_t *data,int len) { // {{{ print the data below the option header, 16 bytes per line as condensed hex with the ascii translation aligned to the trailing hex dump
-	int i,j;
+static void print_hex_row(const uint8_t *data,int n) { // {{{ one hexdump line without its address column: 16 byte positions as spaced hex in two groups, then the ascii in bars, both space padded so the bars always line up
+	int j;
+
+	for (j=0;j<16;j++) {
+		if (j%8==0)
+			fprintf(g_out," ");
+		if (j<n)
+			fprintf(g_out,"%02x ",data[j]);
+		else
+			fprintf(g_out,"   ");
+	}
+	fprintf(g_out," %s",g_bar);
+	for (j=0;j<16;j++) {
+		if (j<n) {
+			unsigned char c=data[j]; // isprint() is undefined for a negative char
+
+			fprintf(g_out,"%c",isprint(c)?c:'.');
+		} else
+			fprintf(g_out," ");
+	}
+	fprintf(g_out,"%s",g_bar);
+} // }}}
+
+static inline void printHexBlock(const uint8_t *data,int len) { // {{{ print the data below the option header, formatted like the trailing packet hex dump with the address column blanked, so bytes, bars and ascii line up with it
+	int i;
 
 	for (i=0;i<len;i+=16) {
 		fprintf(g_out,"\n%*s",OPTHEXCOL,"");
-		for (j=0;j<16;j++) {
-			if (i+j<len)
-				fprintf(g_out,"%02x",data[i+j]);
-			else
-				fprintf(g_out,"  ");
-		}
-		fprintf(g_out," ");
-		for (j=0;j<16&&i+j<len;j++) {
-			unsigned char c=data[i+j]; // isprint() is undefined for a negative char
-
-			fprintf(g_out,"%c",isprint(c)?c:'.');
-		}
+		print_hex_row(data+i,len-i>16?16:len-i);
 	}
 } // }}}
 
@@ -168,6 +177,23 @@ static inline void printWrapped(const uint8_t *data,int len,int firstcol,int con
 		}
 		fprintf(g_out,"%c",data[i]);
 		col++;
+	}
+} // }}}
+
+static inline void printList(const uint8_t *data,int len,int itemsz,char pairsep) { // {{{ print a multi value list: the first item on the header line, every next one on its own line at the value column; an 8 byte item is two addresses joined by pairsep, a 2 byte item is a 16 bit value, else one address per item
+	int i;
+
+	for (i=0;i+itemsz<=len;i+=itemsz) {
+		if (i)
+			fprintf(g_out,"\n%*s",OPTVALCOL,"");
+		if (itemsz==2)
+			print16bits(data+i);
+		else if (itemsz==8)
+			fprintf(g_out,"%u.%u.%u.%u%c%u.%u.%u.%u",
+				data[i],data[i+1],data[i+2],data[i+3],pairsep,
+				data[i+4],data[i+5],data[i+6],data[i+7]);
+		else
+			printIPaddress(data+i);
 	}
 } // }}}
 
@@ -234,41 +260,28 @@ static inline void printIPaddressCompactMaskAddress(const uint8_t *data,int len)
 	}
 } // }}}
 
-static inline int opt_is_str(int o) { // {{{ options whose value is a text string, printed verbatim when fully printable and as a hex+ascii block below the header otherwise
-	switch (o) {
-		case 12:
-		case 14:
-		case 15:
-		case 17:
-		case 18:
-		case 40:
-		case 56:
-		case 62:
-		case 64:
-		case 66:
-		case 67:
-		case 86:
-		case 87:
-		case 100:
-		case 101:
-		case 114:
-		case 147:
-			return 1;
-	}
-	return 0;
-} // }}}
-
-static inline int opt_is_inline(int o) { // {{{ options whose value starts on the header line, so the name is padded out to OPTVALCOL; everything else renders below the header and must not be padded (keep in sync with the switch in print_bootp, whose default case is a hex block)
+static inline int opt_is_inline(int o) { // {{{ options whose value always starts on the header line, so the name is padded out to OPTVALCOL (keep in sync with the switch in print_option_area)
 	switch (o) {
 		case 1:
 		case 2:
+		case 3:
+		case 4:
+		case 5:
+		case 6:
+		case 7:
+		case 8:
+		case 9:
+		case 10:
+		case 11:
 		case 13:
 		case 16:
 		case 19:
 		case 20:
+		case 21:
 		case 22:
 		case 23:
 		case 24:
+		case 25:
 		case 26:
 		case 27:
 		case 28:
@@ -276,13 +289,20 @@ static inline int opt_is_inline(int o) { // {{{ options whose value starts on th
 		case 30:
 		case 31:
 		case 32:
+		case 33:
 		case 34:
 		case 35:
 		case 36:
 		case 37:
 		case 38:
 		case 39:
+		case 41:
+		case 42:
+		case 44:
+		case 45:
 		case 46:
+		case 48:
+		case 49:
 		case 50:
 		case 51:
 		case 52:
@@ -292,8 +312,21 @@ static inline int opt_is_inline(int o) { // {{{ options whose value starts on th
 		case 58:
 		case 59:
 		case 63:
+		case 65:
+		case 68:
+		case 69:
+		case 70:
+		case 71:
+		case 72:
+		case 73:
+		case 74:
+		case 75:
+		case 76:
+		case 78:
 		case 81:
+		case 85:
 		case 91:
+		case 92:
 		case 93:
 		case 94:
 		case 108:
@@ -301,10 +334,13 @@ static inline int opt_is_inline(int o) { // {{{ options whose value starts on th
 		case 118:
 		case 121:
 		case 145:
+		case 148:
+		case 150:
 		case 152:
 		case 153:
 		case 154:
 		case 155:
+		case 162:
 		case 211:
 		case 249:
 			return 1;
@@ -312,62 +348,19 @@ static inline int opt_is_inline(int o) { // {{{ options whose value starts on th
 	return 0;
 } // }}}
 
-static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOOTP header and the options (caller ensures data_len>=DHCP_FIXED)
+static inline int opt_is_str(int o) { // {{{ options rendered as text when the value is fully printable and as a hex+ascii block below the header otherwise: everything without a structured renderer of its own in print_option_area
+	switch (o) {
+		case 55: // Parameter Request List
+		case 82: // Relay Agent Information; both render their own lists below the header
+			return 0;
+	}
+	return !opt_is_inline(o);
+} // }}}
+
+static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode one TLV option area: the options field past the cookie, or an overloaded sname/file field (RFC 2131 option overload)
 	char buf[LARGESTRING];
-	int i,j,valcol,nl;
+	int i,j=0,valcol,nl;
 
-	fprintf(g_out,"    OP: %d (%s)\n",data[0],data[0]>=strcountof(operands)?"*unknown*":operands[data[0]]);
-	fprintf(g_out," HTYPE: %d (%s)\n",data[1],data[1]>=strcountof(htypes)?"*unknown*":htypes[data[1]]);
-	fprintf(g_out,"  HLEN: %d\n",data[2]);
-	fprintf(g_out,"  HOPS: %d\n",data[3]);
-	fprintf(g_out,"   XID: %02x%02x%02x%02x\n",data[4],data[5],data[6],data[7]);
-	fprintf(g_out,"  SECS: ");
-	print16bits(data+8);
-	fprintf(g_out,"\n");
-	fprintf(g_out," FLAGS: %x\n",(unsigned)((data[10]<<8)|data[11]));
-	fprintf(g_out,"CIADDR: ");
-	printIPaddress(data+12);
-	fprintf(g_out,"\n");
-	fprintf(g_out,"YIADDR: ");
-	printIPaddress(data+16);
-	fprintf(g_out,"\n");
-	fprintf(g_out,"SIADDR: ");
-	printIPaddress(data+20);
-	fprintf(g_out,"\n");
-	fprintf(g_out,"GIADDR: ");
-	printIPaddress(data+24);
-	fprintf(g_out,"\n");
-	fprintf(g_out,"CHADDR: ");
-	printHexColon(data+28,16);
-	fprintf(g_out,"\n");
-	i=(int)strnlen((const char *)(data+44),64); // sname is a fixed 64 byte field, may lack a NUL
-	if (is_printable(data+44,i))
-		fprintf(g_out," SNAME: %.64s.\n",data+44);
-	else {
-		fprintf(g_out," SNAME:");
-		printHexBlock(data+44,i);
-		fprintf(g_out,"\n");
-	}
-	i=(int)strnlen((const char *)(data+108),128); // file is a fixed 128 byte field, may lack a NUL
-	if (is_printable(data+108,i))
-		fprintf(g_out," FNAME: %.128s.\n",data+108);
-	else {
-		fprintf(g_out," FNAME:");
-		printHexBlock(data+108,i);
-		fprintf(g_out,"\n");
-	}
-
-	// Options only follow the RFC 2131 magic cookie. Without it this is plain
-	// BOOTP and whatever sits at offset 236 is vendor data, not a TLV list, so
-	// decoding it as options would invent plausible looking garbage. Dump the
-	// area verbatim instead, it is the only thing left to show.
-	if (data_len<DHCP_FIXED+4||memcmp(data+DHCP_FIXED,dhcp_cookie,4)) {
-		fprintf(g_out,"VENDOR: *no DHCP magic cookie, plain BOOTP*");
-		printHexBlock(data+DHCP_FIXED,data_len-DHCP_FIXED);
-		fprintf(g_out,"\n");
-		return;
-	}
-	j=DHCP_FIXED+4;
 	while (j<data_len&&data[j]!=255) {
 		if (data[j]==0) { // pad option, carries neither a length nor a value byte
 			fprintf(g_out,"OPTION: %3d (  0) %s\n",data[j],dhcp_options[data[j]]);
@@ -379,17 +372,20 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 			break;
 		}
 		nl=(int)strlen(dhcp_options[data[j]]);
-		valcol=18+(nl>26?nl:26); // where the value starts (a long name pushes it right)
+		valcol=18+(nl>26?nl+1:26); // where the value starts (a name too long for the pad pushes it right, keeping one separating space)
 		// pad the name out to the value column only when a value actually
 		// follows on this line, otherwise the padding is trailing whitespace
 		if (opt_is_inline(data[j])||(opt_is_str(data[j])&&data[j+1]>0&&is_printable(data+j+2,data[j+1])))
-			fprintf(g_out,"OPTION: %3d (%3d) %-26s",data[j],data[j+1],dhcp_options[data[j]]);
+			fprintf(g_out,"OPTION: %3d (%3d) %-*s",data[j],data[j+1],nl>26?nl+1:26,dhcp_options[data[j]]);
 		else // value rendered on its own lines below: header carries only the name
 			fprintf(g_out,"OPTION: %3d (%3d) %s",data[j],data[j+1],dhcp_options[data[j]]);
 
 		switch (data[j]) {
-			default: // no known structure, plus the deliberately opaque ones: 43 vendor specific, 47 NetBIOS scope, 60 class id, 61 client id, 77 user class
-				printHexBlock(data+j+2,data[j+1]);
+			default: // no structured renderer: a wholly printable value prints as text on the header line; the typically binary ones (43 vendor specific, 61 client id, ...) fail that check and drop to a hex+ascii block
+				if (data[j+1]>0&&is_printable(data+j+2,data[j+1]))
+					printWrapped(data+j+2,data[j+1],valcol,OPTVALCOL,OPTWRAPCOL);
+				else
+					printHexBlock(data+j+2,data[j+1]);
 				break;
 
 			case 1: // Subnetmask
@@ -403,29 +399,6 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 					fprintf(g_out,"*malformed - too short*");
 				else
 					printIPaddress(data+j+2);
-				break;
-
-			case 12: // Hostname
-			case 14: // Merit dump file
-			case 15: // Domain name
-			case 17: // Root Path
-			case 18: // Extensions path
-			case 40: // NIS domain
-			case 56: // Message
-			case 62: // Netware/IP domain name
-			case 64: // NIS+ domain
-			case 66: // TFTP server name
-			case 67: // bootfile name
-			case 86: // NDS Tree name
-			case 87: // NDS context
-			case 100: // PCode - TZ-Posix String
-			case 101: // TCode - TX-Database String
-			case 114: // Captive-portal
-			case 147: // DOTS Reference Identifier
-				if (is_printable(data+j+2,data[j+1]))
-					printWrapped(data+j+2,data[j+1],valcol,OPTVALCOL,OPTWRAPCOL);
-				else
-					printHexBlock(data+j+2,data[j+1]);
 				break;
 
 			case 3: // Routers
@@ -459,31 +432,35 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 			case 148: // DOTS Address
 			case 150: // TFTP server address
 			case 162: // Encrypted DNS Server
-				for (i=0;i<data[j+1]/4;i++) {
-					fprintf(g_out,"\n%*s",OPTLISTCOL,"");
-					printIPaddress(data+j+2+i*4);
-				}
+				if (data[j+1]<4||data[j+1]%4) { // not a whole number of addresses: dump instead of inventing one
+					fprintf(g_out,"*malformed*");
+					printHexBlock(data+j+2,data[j+1]);
+				} else
+					printList(data+j+2,data[j+1],4,' ');
 				break;
 
 			case 21: // Policy filter
-				for (i=0;i<data[j+1]/8;i++) {
-					fprintf(g_out,"\n%*s",OPTLISTCOL,"");
-					printIPaddressMask(data+j+2+i*8);
-				}
+				if (data[j+1]<8||data[j+1]%8) {
+					fprintf(g_out,"*malformed*");
+					printHexBlock(data+j+2,data[j+1]);
+				} else
+					printList(data+j+2,data[j+1],8,'/');
 				break;
 
 			case 33: // Static route
-				for (i=0;i<data[j+1]/8;i++) {
-					fprintf(g_out,"\n%*s",OPTLISTCOL,"");
-					printIPaddressAddress(data+j+2+i*8);
-				}
+				if (data[j+1]<8||data[j+1]%8) {
+					fprintf(g_out,"*malformed*");
+					printHexBlock(data+j+2,data[j+1]);
+				} else
+					printList(data+j+2,data[j+1],8,' ');
 				break;
 
 			case 25: // Path MTU plateau table
-				for (i=0;i<data[j+1]/2;i++) {
-					fprintf(g_out,"\n%*s",OPTLISTCOL,"");
-					print16bits(data+j+2+i*2);
-				}
+				if (data[j+1]<2||data[j+1]%2) {
+					fprintf(g_out,"*malformed*");
+					printHexBlock(data+j+2,data[j+1]);
+				} else
+					printList(data+j+2,data[j+1],2,' ');
 				break;
 
 			case 13: // bootfile size
@@ -607,16 +584,26 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 
 			case 82: // Relay Agent Information
 				for (i=j+2;i<j+data[j+1]+2;) {
+					const char *sn;
+
 					if (i+2>j+data[j+1]+2) { // suboption code and length bytes must be present
 						fprintf(g_out,"\n%-17s *malformed - truncated*"," ");
 						break;
 					}
-					fprintf(g_out,"\n%-17s %s"," ",data[i]>=strcountof(relayagent_suboptions)?"*unknown*":relayagent_suboptions[data[i]]);
+					sn=data[i]>=strcountof(relayagent_suboptions)?"*unknown*":relayagent_suboptions[data[i]];
 					if (i+data[i+1]+2>j+data[j+1]+2) {
-						fprintf(g_out," *malformed - too large*\n");
+						fprintf(g_out,"\n%-17s %s *malformed - too large*\n"," ",sn);
 						break;
 					}
-					printHexBlock(data+i+2,data[i+1]);
+					// a wholly printable value sits on the suboption's line like
+					// an inline option value, anything else in a hex+ascii block
+					if (data[i+1]>0&&is_printable(data+i+2,data[i+1])) {
+						fprintf(g_out,"\n%-17s %-26s"," ",sn);
+						printWrapped(data+i+2,data[i+1],OPTVALCOL,OPTVALCOL,OPTWRAPCOL);
+					} else {
+						fprintf(g_out,"\n%-17s %s"," ",sn);
+						printHexBlock(data+i+2,data[i+1]);
+					}
 					i+=data[i+1]+2;
 				}
 				break;
@@ -652,6 +639,92 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 
 		j+=data[j+1]+2;
 	}
+} // }}}
+
+static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOOTP header and the options (caller ensures data_len>=DHCP_FIXED)
+	int i,j,overload=0;
+
+	// Option 52 relocates options into the sname/file header fields; find it
+	// first, it decides below whether those fields hold names or options.
+	if (data_len>=DHCP_FIXED+4&&!memcmp(data+DHCP_FIXED,dhcp_cookie,4)) {
+		j=DHCP_FIXED+4;
+		while (j<data_len&&data[j]!=255) {
+			if (data[j]==0) {
+				j++;
+				continue;
+			}
+			if (j+2>data_len||j+2+data[j+1]>data_len)
+				break;
+			if (data[j]==52&&data[j+1]>=1)
+				overload=data[j+2]&3;
+			j+=data[j+1]+2;
+		}
+	}
+
+	fprintf(g_out,"    OP: %d (%s)\n",data[0],data[0]>=strcountof(operands)?"*unknown*":operands[data[0]]);
+	fprintf(g_out," HTYPE: %d (%s)\n",data[1],data[1]>=strcountof(htypes)?"*unknown*":htypes[data[1]]);
+	fprintf(g_out,"  HLEN: %d\n",data[2]);
+	fprintf(g_out,"  HOPS: %d\n",data[3]);
+	fprintf(g_out,"   XID: %02x%02x%02x%02x\n",data[4],data[5],data[6],data[7]);
+	fprintf(g_out,"  SECS: ");
+	print16bits(data+8);
+	fprintf(g_out,"\n");
+	fprintf(g_out," FLAGS: %x\n",(unsigned)((data[10]<<8)|data[11]));
+	fprintf(g_out,"CIADDR: ");
+	printIPaddress(data+12);
+	fprintf(g_out,"\n");
+	fprintf(g_out,"YIADDR: ");
+	printIPaddress(data+16);
+	fprintf(g_out,"\n");
+	fprintf(g_out,"SIADDR: ");
+	printIPaddress(data+20);
+	fprintf(g_out,"\n");
+	fprintf(g_out,"GIADDR: ");
+	printIPaddress(data+24);
+	fprintf(g_out,"\n");
+	fprintf(g_out,"CHADDR: ");
+	printHexColon(data+28,16);
+	fprintf(g_out,"\n");
+	i=(int)strnlen((const char *)(data+44),64); // sname is a fixed 64 byte field, may lack a NUL
+	if (overload&2) // the field carries options instead, printed below with the rest
+		fprintf(g_out," SNAME: %s<overloaded>\n",g_ovmark?"\1":"");
+	else if (i==0) // empty prints as empty, not as a legacy lone dot
+		fprintf(g_out," SNAME:\n");
+	else if (is_printable(data+44,i))
+		fprintf(g_out," SNAME: %.64s\n",data+44);
+	else {
+		fprintf(g_out," SNAME:");
+		printHexBlock(data+44,i);
+		fprintf(g_out,"\n");
+	}
+	i=(int)strnlen((const char *)(data+108),128); // file is a fixed 128 byte field, may lack a NUL
+	if (overload&1)
+		fprintf(g_out," FNAME: %s<overloaded>\n",g_ovmark?"\1":"");
+	else if (i==0)
+		fprintf(g_out," FNAME:\n");
+	else if (is_printable(data+108,i))
+		fprintf(g_out," FNAME: %.128s\n",data+108);
+	else {
+		fprintf(g_out," FNAME:");
+		printHexBlock(data+108,i);
+		fprintf(g_out,"\n");
+	}
+
+	// Options only follow the RFC 2131 magic cookie. Without it this is plain
+	// BOOTP and whatever sits at offset 236 is vendor data, not a TLV list, so
+	// decoding it as options would invent plausible looking garbage. Dump the
+	// area verbatim instead, it is the only thing left to show.
+	if (data_len<DHCP_FIXED+4||memcmp(data+DHCP_FIXED,dhcp_cookie,4)) {
+		fprintf(g_out,"VENDOR: *no DHCP magic cookie, plain BOOTP*");
+		printHexBlock(data+DHCP_FIXED,data_len-DHCP_FIXED);
+		fprintf(g_out,"\n");
+		return;
+	}
+	print_option_area(data+DHCP_FIXED+4,data_len-DHCP_FIXED-4);
+	if (overload&1) // the file field's options, then sname's, in RFC 3396 order
+		print_option_area(data+108,128);
+	if (overload&2)
+		print_option_area(data+44,64);
 } // }}}
 
 void dhcp_hexdump(const uint8_t *buf,int len) { // {{{ full-frame hex dump (the -H output)
@@ -787,6 +860,8 @@ void dhcp_fprint(FILE *out,const struct dhcp_frame *f,const char *ts) { // {{{ v
 	int i;
 
 	g_out=out;
+	g_bar="|";
+	g_ovmark=0;
 
 	if (f->nvlan)
 		fprintf(g_out,"  VLAN:");
@@ -820,41 +895,25 @@ void dhcp_print(const struct dhcp_frame *f,const char *ts) { // {{{ classic verb
 	dhcp_fprint(stdout,f,ts);
 } // }}}
 
-static void hexdump_c(const uint8_t *data,int len,const char *bar) { // {{{ hexdump -C style dump to g_out; bar is the vertical separator glyph
-	int i,j;
+static void hexdump_c(const uint8_t *data,int len) { // {{{ hexdump -C style dump to g_out, the ascii in g_bar separators
+	int i;
 
-	// like hexdump -C, but the trailing bar is also space padded on the last
-	// partial line so both bars line up vertically across every row
 	for (i=0;i<len;i+=16) {
 		fprintf(g_out,"%08x ",(unsigned)i);
-		for (j=0;j<16;j++) {
-			if (j%8==0)
-				fprintf(g_out," ");
-			if (i+j<len)
-				fprintf(g_out,"%02x ",data[i+j]);
-			else
-				fprintf(g_out,"   ");
-		}
-		fprintf(g_out," %s",bar);
-		for (j=0;j<16;j++) {
-			if (i+j<len) {
-				unsigned char c=data[i+j];
-
-				fprintf(g_out,"%c",isprint(c)?c:'.');
-			} else
-				fprintf(g_out," ");
-		}
-		fprintf(g_out,"%s\n",bar);
+		print_hex_row(data+i,len-i>16?16:len-i);
+		fprintf(g_out,"\n");
 	}
 } // }}}
 
 void dhcp_fprint_payload(FILE *out,const uint8_t *data,int data_len,const char *bar) { // {{{ decode + hex dump of a DHCP payload (TUI packet detail)
 	g_out=out;
+	g_bar=bar?bar:"|";
+	g_ovmark=1;
 	if (data_len<DHCP_FIXED) {
 		fprintf(g_out,"*truncated - %d bytes*\n",data_len);
 		return;
 	}
 	print_bootp(data,data_len);
 	fprintf(g_out,"\n");
-	hexdump_c(data,data_len,bar?bar:"|");
+	hexdump_c(data,data_len);
 } // }}}

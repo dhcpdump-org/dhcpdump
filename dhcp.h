@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <sys/time.h>
 
+#include "dhcpdump.h" // struct dhcp_vlan / DHCP_MAX_VLAN
+
 // }}}
 
 // Structured DHCP field extraction, part of libdhcpdump. Where dhcp_print gives
@@ -41,6 +43,8 @@ struct dhcp_msg {
 	int rawlen; // length of raw
 	uint32_t srcip; // L3 source, host order; set by the caller
 	uint32_t dstip; // L3 destination, host order; set by the caller
+	struct dhcp_vlan vlan[DHCP_MAX_VLAN]; // VLAN tags of the frame; set by the caller
+	int nvlan; // number of tags in vlan[]; set by the caller
 	uint8_t op; // BOOTREQUEST / BOOTREPLY
 	uint8_t htype; // hardware type
 	uint8_t hlen; // hardware address length (clamped to <=16)
@@ -52,6 +56,7 @@ struct dhcp_msg {
 	uint32_t giaddr; // relay agent IP
 	uint8_t msgtype; // option 53, 0 if absent
 	uint32_t serverid; // option 54, 0 if absent
+	uint32_t reqip; // requested IP (option 50), 0 if absent
 	char hostname[64]; // option 12, empty if absent
 };
 
@@ -60,8 +65,8 @@ struct dhcp_msg {
 // {{{ api
 
 // Extract the DHCP fields from a UDP payload (data,data_len) into out. Only the
-// packet-derived fields are set; the caller fills ts/srcip/dstip. Returns 1 if
-// this is a usable DHCP message (fixed header present), 0 otherwise.
+// packet-derived fields are set; the caller fills ts/srcip/dstip/vlan/nvlan.
+// Returns 1 if this is a usable DHCP message (fixed header present), 0 otherwise.
 int dhcp_parse(const uint8_t *data,int data_len,struct dhcp_msg *out);
 
 // Name of a DHCP message type (option 53 value), never NULL.

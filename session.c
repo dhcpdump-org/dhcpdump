@@ -225,6 +225,11 @@ static void tx_add_msg(struct sess_model *m,struct sess_tx *tx,const struct dhcp
 			&&tx->msgs_tail->serverid==msg->serverid) {
 		tx->msgs_tail->count++;
 		tx->msgs_tail->ts=msg->ts;
+		tx->msgs_tail->reqip=msg->reqip;
+		tx->msgs_tail->yiaddr=msg->yiaddr;
+		tx->msgs_tail->ciaddr=msg->ciaddr;
+		memcpy(tx->msgs_tail->vlan,msg->vlan,sizeof tx->msgs_tail->vlan);
+		tx->msgs_tail->nvlan=msg->nvlan;
 		free(tx->msgs_tail->raw); // keep the latest retransmission's packet
 		tx->msgs_tail->raw=raw_dup(msg->raw,msg->rawlen);
 		tx->msgs_tail->rawlen=tx->msgs_tail->raw?msg->rawlen:0;
@@ -237,6 +242,11 @@ static void tx_add_msg(struct sess_model *m,struct sess_tx *tx,const struct dhcp
 	mm->ts=msg->ts;
 	mm->srcip=msg->srcip;
 	mm->serverid=msg->serverid;
+	mm->reqip=msg->reqip;
+	mm->yiaddr=msg->yiaddr;
+	mm->ciaddr=msg->ciaddr;
+	memcpy(mm->vlan,msg->vlan,sizeof mm->vlan);
+	mm->nvlan=msg->nvlan;
 	mm->msgtype=msg->msgtype;
 	mm->op=msg->op;
 	mm->count=1;
@@ -273,6 +283,10 @@ void sess_ingest(struct sess_model *m,const struct dhcp_msg *msg) { // {{{
 		return;
 	s->last=msg->ts;
 	s->last_msgtype=msg->msgtype;
+	if (msg->nvlan) { // remember the latest tagging; a lone untagged reply does not clear it
+		s->nvlan=msg->nvlan;
+		memcpy(s->vlan,msg->vlan,sizeof s->vlan);
+	}
 	if (msg->hostname[0])
 		memcpy(s->hostname,msg->hostname,sizeof s->hostname);
 	if (msg->serverid)

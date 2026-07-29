@@ -124,6 +124,8 @@ static void tui_ingest(u_char *user,const struct pcap_pkthdr *h,const u_char *sp
 	msg.rawlen=f.plen;
 	msg.srcip=ntohl(f.srcip);
 	msg.dstip=ntohl(f.dstip);
+	memcpy(msg.vlan,f.vlan,sizeof msg.vlan);
+	msg.nvlan=f.nvlan;
 	sess_ingest(m,&msg);
 } // }}}
 
@@ -177,6 +179,15 @@ static void fmt_ip(char *b,size_t n,uint32_t ip) { // {{{
 		snprintf(b,n,"-");
 	else
 		snprintf(b,n,"%u.%u.%u.%u",(ip>>24)&255,(ip>>16)&255,(ip>>8)&255,ip&255);
+} // }}}
+
+static void fmt_vlan(char *b,size_t n,const struct dhcp_vlan *v,int nv) { // {{{ stacked tags as outer.inner vlan ids
+	int i,p=0;
+
+	if (n)
+		b[0]=0;
+	for (i=0;i<nv&&p<(int)n;i++)
+		p+=snprintf(b+p,n-p,"%s%u",i?".":"",v[i].id);
 } // }}}
 
 static void fmt_age(char *b,size_t n,long s) { // {{{
@@ -485,7 +496,7 @@ static void draw_hscroll(int y,int from,int to,int items,int pos) { // {{{ horiz
 static void draw_list(struct sess_model *m,int x,int y,int w,int h,int selidx,int *top,const struct timeval *now,int active) { // {{{
 	char hdr[512];
 	struct sess *s;
-	int i,dataH,cw,sbx;
+	int i,dataH,cw,sbx,vw=0;
 
 	if (w<1||h<1)
 		return;
@@ -493,7 +504,21 @@ static void draw_list(struct sess_model *m,int x,int y,int w,int h,int selidx,in
 	sbx=x+w-1; // rightmost column is the scrollbar
 	cw=w-1; // width left for content; the 2 column gutter lives inside it
 
-	snprintf(hdr,sizeof hdr,"%-17s %-8s %-15s %3s %5s  %s","MAC","STATE","LEASE","TX","AGE","HOST");
+	for (s=m->head;s;s=s->next) // widest VLAN tag string; 0 means all untagged and the column is omitted
+		if (s->nvlan) {
+			char vb[16];
+
+			fmt_vlan(vb,sizeof vb,s->vlan,s->nvlan);
+			if ((int)strlen(vb)>vw)
+				vw=(int)strlen(vb);
+		}
+	if (vw&&vw<4)
+		vw=4; // no narrower than the VLAN header
+
+	if (vw)
+		snprintf(hdr,sizeof hdr,"%-17s %-8s %-15s %*s %3s %5s  %s","MAC","STATE","LEASE",vw,"VLAN","TX","AGE","HOST");
+	else
+		snprintf(hdr,sizeof hdr,"%-17s %-8s %-15s %3s %5s  %s","MAC","STATE","LEASE","TX","AGE","HOST");
 	draw_clip(x+2,y,cw-2,YAS_BOLD,hdr); // leave a 2 column gutter for the selection marker
 
 	dataH=h-1; // rows below the header
@@ -518,7 +543,7 @@ static void draw_list(struct sess_model *m,int x,int y,int w,int h,int selidx,in
 	for (i=0;i<*top&&s;i++)
 		s=s->next;
 	for (i=0;i<dataH&&s;i++,s=s->next) {
-		char mac[MACSTR],lease[20],age[24],line[512];
+		char mac[MACSTR],lease[20],age[24],vb[16],line[512];
 		enum tx_state st=s->txs?sess_tx_state(s->txs,now):TX_COMPLETE;
 		int sel=*top+i==selidx;
 		uint32_t attr=sel&&active?YAS_INVERSE:state_attr(st);
@@ -526,8 +551,13 @@ static void draw_list(struct sess_model *m,int x,int y,int w,int h,int selidx,in
 		fmt_mac(mac,sizeof mac,s->chaddr,s->hlen);
 		fmt_ip(lease,sizeof lease,s->lease_ip);
 		fmt_age(age,sizeof age,(long)(now->tv_sec-s->last.tv_sec));
-		snprintf(line,sizeof line,"%-17s %-8s %-15s %3d %5s  %s",
-			mac,state_name(st),lease,s->ntx,age,s->hostname);
+		if (vw) {
+			fmt_vlan(vb,sizeof vb,s->vlan,s->nvlan); // empty for an untagged client
+			snprintf(line,sizeof line,"%-17s %-8s %-15s %*s %3d %5s  %s",
+				mac,state_name(st),lease,vw,vb,s->ntx,age,s->hostname);
+		} else
+			snprintf(line,sizeof line,"%-17s %-8s %-15s %3d %5s  %s",
+				mac,state_name(st),lease,s->ntx,age,s->hostname);
 		draw_clip(x+2,y+1+i,cw-2,attr,line);
 		if (sel) { // active pane: inverse row; inactive pane: a marker in the gutter
 			if (active)
@@ -548,36 +578,91 @@ static void drow_add(uint32_t attr,struct sess_msg *msg,const char *text) { // {
 } // }}}
 
 static void build_detail_rows(struct sess *s,const struct timeval *now) { // {{{ flatten a client into detail rows (header, summary, per-message rows)
-	char buf[256],mac[MACSTR],ip1[20],ip2[20];
+	char buf[256],pre[64],mac[MACSTR],ip1[20],ip2[20],age[24];
 	struct sess_tx *tx;
+	int vw=0,fw;
 
 	ndrows=0;
 	if (!s)
 		return;
+
+	for (tx=s->txs;tx;tx=tx->next) { // widest per-packet VLAN tag string; 0 means all untagged
+		struct sess_msg *mm;
+
+		for (mm=tx->msgs;mm;mm=mm->next)
+			if (mm->nvlan) {
+				char vb[16];
+
+				fmt_vlan(vb,sizeof vb,mm->vlan,mm->nvlan);
+				if ((int)strlen(vb)>vw)
+					vw=(int)strlen(vb);
+			}
+	}
+	// Shared geometry: every timestamp in column 0, every IP in one column,
+	// every age in one column after it, then the extras (srv/count). The
+	// message rows hold a right aligned VLAN field between the timestamp
+	// and the message type (blank when the packet is untagged); its width
+	// also pushes the transaction rows' IP, which needs at least column 34
+	// for its own timestamp, xid and state - met at a field width of 7.
+	fw=vw+2>7?vw+2:7;
 
 	fmt_mac(mac,sizeof mac,s->chaddr,s->hlen);
 	snprintf(buf,sizeof buf,"Client %s%s%s",mac,s->hostname[0]?"  ":"",s->hostname);
 	drow_add(YAS_BOLD,NULL,buf);
 	fmt_ip(ip1,sizeof ip1,s->lease_ip);
 	fmt_ip(ip2,sizeof ip2,s->server_ip);
-	snprintf(buf,sizeof buf,"htype %u  lease %s  server %s  %d tx",s->htype,ip1,ip2,s->ntx);
+	if (s->nvlan) {
+		char vb[16];
+
+		fmt_vlan(vb,sizeof vb,s->vlan,s->nvlan);
+		snprintf(pre,sizeof pre,"htype %u  vlan %s",s->htype,vb);
+	} else
+		snprintf(pre,sizeof pre,"htype %u",s->htype);
+	// the lease sits in the pane's shared IP column, the client's last
+	// activity in the age column and the server under the srv extras, like
+	// the transaction rows below
+	fmt_age(age,sizeof age,(long)(now->tv_sec-s->last.tv_sec));
+	snprintf(buf,sizeof buf,"%-*s  %-15s  %4s  srv %s  %d tx",25+fw,pre,ip1,age,ip2,s->ntx);
 	drow_add(0,NULL,buf);
 	drow_add(0,NULL,""); // blank separator
 
 	for (tx=s->txs;tx;tx=tx->next) {
 		enum tx_state st=sess_tx_state(tx,now);
 		struct sess_msg *mm;
-		char age[24];
+		char tim[16];
+		struct tm tmv;
 
+		localtime_r(&tx->last.tv_sec,&tmv); // the transaction row carries its last event's time
+		strftime(tim,sizeof tim,"%H:%M:%S",&tmv);
 		fmt_age(age,sizeof age,(long)(now->tv_sec-tx->last.tv_sec));
 		fmt_ip(ip1,sizeof ip1,tx->yiaddr);
-		snprintf(buf,sizeof buf,"xid %08x  %-8s  %-15s  %s",tx->xid,state_name(st),tx->yiaddr?ip1:"",age);
+		snprintf(buf,sizeof buf,"%s  xid %08x  %-8s%*s%-15s  %4s",tim,tx->xid,state_name(st),fw-5,"",tx->yiaddr?ip1:"",age);
 		drow_add(state_attr(st),NULL,buf);
 		for (mm=tx->msgs;mm;mm=mm->next) {
-			uint32_t a=0;
-			char src[20],srv[40]="",cnt[16]="";
+			uint32_t a=0,pip=0;
+			char srv[40]="",cnt[16]="",vb[16]="";
 
-			fmt_ip(src,sizeof src,mm->srcip);
+			localtime_r(&mm->ts.tv_sec,&tmv);
+			strftime(tim,sizeof tim,"%H:%M:%S",&tmv); // time of the last (retransmitted) copy
+			fmt_age(age,sizeof age,(long)(now->tv_sec-mm->ts.tv_sec));
+			if (mm->nvlan)
+				fmt_vlan(vb,sizeof vb,mm->vlan,mm->nvlan);
+			switch (mm->msgtype) { // the address that is the message's payload, not its transport
+				case DHCPOFFER:
+				case DHCPACK:
+					pip=mm->yiaddr;
+					break;
+				case DHCPDISCOVER:
+				case DHCPREQUEST:
+				case DHCPDECLINE:
+					pip=mm->reqip?mm->reqip:mm->ciaddr; // a renewing REQUEST names its lease in ciaddr
+					break;
+				case DHCPRELEASE:
+				case DHCPINFORM:
+					pip=mm->ciaddr;
+					break;
+			}
+			fmt_ip(ip1,sizeof ip1,pip);
 			if (mm->serverid) {
 				fmt_ip(ip2,sizeof ip2,mm->serverid);
 				snprintf(srv,sizeof srv,"  srv %s",ip2);
@@ -587,7 +672,7 @@ static void build_detail_rows(struct sess *s,const struct timeval *now) { // {{{
 			// an offer from a server the client did not pick shows in yellow
 			if (mm->msgtype==DHCPOFFER&&tx->selected_server&&mm->serverid&&mm->serverid!=tx->selected_server)
 				a=YAS_FGCOLOR(YAS_YELLOW);
-			snprintf(buf,sizeof buf,"  %-9s from %-15s%s%s",dhcp_msgtype_name(mm->msgtype),src,srv,cnt);
+			snprintf(buf,sizeof buf,"%s  %*s  %-14s %-15s  %4s%s%s",tim,fw,vb,dhcp_msgtype_name(mm->msgtype),pip?ip1:"",age,srv,cnt);
 			drow_add(a,mm,buf);
 		}
 	}
@@ -803,12 +888,25 @@ static int draw_text(int x,int y,int w,int h,const char *text,int top,int hoff) 
 		int len=nl?(int)(nl-p):(int)strlen(p);
 
 		if (li>=top&&li<top+h) {
-			char line[1024];
+			char line[1024],*ov;
 			int c=len<(int)sizeof line-1?len:(int)sizeof line-1;
 
 			memcpy(line,p,c);
 			line[c]=0;
 			draw_clip(x,y+li-top,w,0,hoff>0?u8skip(line,hoff):line);
+			// recolor the decoder's overload marker, identified by its \1 tag
+			// (never rendered from packet data, so a crafted literal
+			// "<overloaded>" field value stays in the default colour); plain
+			// yellow reads as brown on classic palettes
+			ov=strstr(line,"\1<overloaded>");
+			if (ov) {
+				int col;
+
+				*ov=0; // measure the prefix width in place; the tag itself is zero width
+				col=dwidth(line)-hoff;
+				if (col>=0&&col<w)
+					draw_clip(x+col,y+li-top,w-col<12?w-col:12,YAS_FGCOLOR(YAS_YELLOW),"<overloaded>");
+			}
 		}
 		li++;
 		if (!nl)

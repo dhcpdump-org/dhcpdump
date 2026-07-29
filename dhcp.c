@@ -89,6 +89,10 @@ int dhcp_parse(const uint8_t *data,int data_len,struct dhcp_msg *out) { // {{{ e
 				if (data[j+1]>=4)
 					out->serverid=be32(data+j+2);
 				break;
+			case 50: // requested IP address
+				if (data[j+1]>=4)
+					out->reqip=be32(data+j+2);
+				break;
 			case 12: { // hostname
 				int n=data[j+1],i;
 

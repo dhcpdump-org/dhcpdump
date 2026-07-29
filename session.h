@@ -47,6 +47,11 @@ struct sess_msg { // one message inside a transaction, oldest first
 	int rawlen; // length of raw
 	uint32_t srcip; // host order, sender L3 address
 	uint32_t serverid; // server identifier (option 54), 0 if none
+	uint32_t reqip; // requested IP (option 50), host order, 0 if none
+	uint32_t yiaddr; // offered/assigned IP (BOOTREPLY), host order, 0 if none
+	uint32_t ciaddr; // client's own IP (e.g. renewing), host order, 0 if none
+	struct dhcp_vlan vlan[DHCP_MAX_VLAN]; // VLAN tags of the frame (latest copy)
+	int nvlan; // number of tags in vlan[], 0 when untagged
 	uint8_t msgtype; // DHCP message type (option 53)
 	uint8_t op; // BOOTREQUEST / BOOTREPLY (direction)
 	int count; // identical messages collapsed here (retransmissions), >=1
@@ -71,6 +76,8 @@ struct sess { // one client, keyed by hardware address; kept in stable first-see
 	uint8_t chaddr[16];
 	uint8_t hlen;
 	uint8_t htype;
+	struct dhcp_vlan vlan[DHCP_MAX_VLAN]; // VLAN tags of the latest frame
+	int nvlan; // number of tags in vlan[], 0 when untagged
 	struct timeval first,last;
 	uint32_t lease_ip; // last assigned IP (from ACK), host order
 	uint32_t server_ip; // last server seen (option 54 / siaddr), host order
