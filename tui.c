@@ -105,7 +105,18 @@ static void on_stop(int sig __attribute__((unused))) {
 	f_stop=1;
 }
 
+// hand the terminal back before the stop takes effect; covers both the Ctrl-Z
+// key (which raises SIGTSTP by hand, ISIG being off) and an external kill -TSTP
+static void on_tstp(int sig __attribute__((unused))) {
+	yascreen_altbuf(scr,0);
+	yascreen_cursor(scr,1);
+	yascreen_term_restore(scr);
+	signal(SIGTSTP,SIG_DFL);
+	raise(SIGTSTP); // blocked while in the handler: the stop happens on return, with the terminal already sane
+}
+
 static void on_cont(int sig __attribute__((unused))) {
+	signal(SIGTSTP,on_tstp); // re-arm after the SIG_DFL stop above
 	f_cont=1;
 }
 
@@ -1204,6 +1215,7 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 	signal(SIGWINCH,on_winch);
 	signal(SIGINT,on_stop);
 	signal(SIGTERM,on_stop);
+	signal(SIGTSTP,on_tstp);
 	signal(SIGCONT,on_cont);
 
 	while (!f_stop) {
@@ -1285,11 +1297,8 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 				yascreen_set_unicode(scr,unicode);
 				continue;
 			}
-			if (ch==YAS_K_C_Z) { // suspend from anywhere; ISIG is off, so the stop is raised by hand after handing the terminal back
-				yascreen_altbuf(scr,0);
-				yascreen_cursor(scr,1);
-				yascreen_term_restore(scr);
-				kill(getpid(),SIGTSTP); // on_cont reenters the TUI when resumed
+			if (ch==YAS_K_C_Z) { // suspend from anywhere; ISIG is off, so the stop is raised by hand
+				kill(getpid(),SIGTSTP); // on_tstp hands the terminal back, on_cont reenters the TUI when resumed
 				continue;
 			}
 
