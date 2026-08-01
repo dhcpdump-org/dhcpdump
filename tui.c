@@ -38,6 +38,7 @@ enum { LAYOUT_VSPLIT,LAYOUT_HSPLIT }; // side by side / top and bottom
 static yascreen *scr=NULL;
 static volatile sig_atomic_t f_winch=1; // pending resize (1 forces initial layout)
 static volatile sig_atomic_t f_stop=0; // quit requested
+static volatile sig_atomic_t f_tstp=0; // suspend requested (Ctrl-Z key or external SIGTSTP)
 static volatile sig_atomic_t f_cont=0; // resumed after a suspend
 enum { FOCUS_LIST,FOCUS_DETAIL }; // which pane the keyboard drives
 
@@ -105,19 +106,27 @@ static void on_stop(int sig __attribute__((unused))) {
 	f_stop=1;
 }
 
-// hand the terminal back before the stop takes effect; covers both the Ctrl-Z
-// key (which raises SIGTSTP by hand, ISIG being off) and an external kill -TSTP
+// an external kill -TSTP can land while yascreen is mid-write, and its calls
+// are not async-signal-safe; only note the request here and let the event loop
+// hand the terminal back at a safe point (do_suspend below). The Ctrl-Z key
+// (ISIG is off, so it arrives as input) sets the same flag.
 static void on_tstp(int sig __attribute__((unused))) {
+	f_tstp=1;
+}
+
+static void on_cont(int sig __attribute__((unused))) {
+	signal(SIGTSTP,on_tstp); // re-arm after the SIG_DFL stop in do_suspend
+	f_cont=1;
+}
+
+// hand the terminal back and really stop; called from the event loop, in
+// normal context, where the yascreen calls are safe
+static void do_suspend(void) {
 	yascreen_altbuf(scr,0);
 	yascreen_cursor(scr,1);
 	yascreen_term_restore(scr);
 	signal(SIGTSTP,SIG_DFL);
-	raise(SIGTSTP); // blocked while in the handler: the stop happens on return, with the terminal already sane
-}
-
-static void on_cont(int sig __attribute__((unused))) {
-	signal(SIGTSTP,on_tstp); // re-arm after the SIG_DFL stop above
-	f_cont=1;
+	raise(SIGTSTP); // stops right here; on fg, on_cont re-arms the handler and schedules the screen reenter
 }
 
 // }}}
@@ -159,6 +168,8 @@ static const char *state_name(enum tx_state st) { // {{{
 			return "complete";
 		case TX_NAK:
 			return "NAK";
+		case TX_DECLINED:
+			return "declined";
 		case TX_TIMEOUT:
 			return "timeout";
 	}
@@ -171,6 +182,8 @@ static uint32_t state_attr(enum tx_state st) { // {{{ colour per transaction sta
 			return YAS_FGCOLOR(YAS_RED)|YAS_BOLD;
 		case TX_NAK:
 			return YAS_FGCOLOR(YAS_RED);
+		case TX_DECLINED: // a failure like NAK, but the client's call, hence its own colour
+			return YAS_FGCOLOR(YAS_MAGENTA);
 		case TX_WAIT:
 			return YAS_FGCOLOR(YAS_YELLOW);
 		case TX_OFFERED:
@@ -1187,6 +1200,7 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 	char errbuf[PCAP_ERRBUF_SIZE];
 	int pcfd=-1;
 	int top=0;
+	int prc=0;
 
 	g_keep=keep;
 	sess_model_on_msg_free(m,on_msg_evict,NULL); // set before any ingest, the offline load below is one
@@ -1224,6 +1238,10 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 		uint64_t essto;
 		int fdmax,nn,ch;
 
+		if (f_tstp) { // suspend requested: this is the safe point to let go of the terminal
+			f_tstp=0;
+			do_suspend();
+		}
 		if (f_cont) { // resumed after a suspend: reenter raw mode and the alternate screen
 			yascreen_term_set(scr,YAS_NOBUFF|YAS_NOSIGN|YAS_NOECHO);
 			yascreen_altbuf(scr,1);
@@ -1297,8 +1315,8 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 				yascreen_set_unicode(scr,unicode);
 				continue;
 			}
-			if (ch==YAS_K_C_Z) { // suspend from anywhere; ISIG is off, so the stop is raised by hand
-				kill(getpid(),SIGTSTP); // on_tstp hands the terminal back, on_cont reenters the TUI when resumed
+			if (ch==YAS_K_C_Z) { // suspend from anywhere; ISIG is off, so the key arrives as input
+				f_tstp=1; // acted on at the top of the loop, together with an external SIGTSTP
 				continue;
 			}
 
@@ -1436,8 +1454,10 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 			}
 		}
 
-		if (live&&(pcfd<0||FD_ISSET(pcfd,&r)))
-			pcap_dispatch(cap,-1,tui_ingest,(u_char *)m);
+		// a dead capture (e.g. the interface went away) keeps its fd readable,
+		// so looping on the error would spin at full CPU; stop instead
+		if (live&&(pcfd<0||FD_ISSET(pcfd,&r))&&(prc=pcap_dispatch(cap,-1,tui_ingest,(u_char *)m))<0)
+			break;
 	}
 
 	yascreen_altbuf(scr,0);
@@ -1445,6 +1465,11 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 	yascreen_term_restore(scr);
 	yascreen_free(scr);
 	scr=NULL;
+
+	if (prc<0) { // report only now, with the terminal sane again
+		fprintf(stderr,"pcap_dispatch: %s\n",pcap_geterr(cap));
+		return -1;
+	}
 
 	return 0;
 } // }}}
