@@ -225,6 +225,7 @@ static void tx_add_msg(struct sess_model *m,struct sess_tx *tx,const struct dhcp
 			&&tx->msgs_tail->serverid==msg->serverid) {
 		tx->msgs_tail->count++;
 		tx->msgs_tail->ts=msg->ts;
+		tx->msgs_tail->srcip=msg->srcip;
 		tx->msgs_tail->reqip=msg->reqip;
 		tx->msgs_tail->yiaddr=msg->yiaddr;
 		tx->msgs_tail->ciaddr=msg->ciaddr;
@@ -301,6 +302,18 @@ void sess_ingest(struct sess_model *m,const struct dhcp_msg *msg) { // {{{
 	tx_add_msg(m,tx,msg);
 
 	switch (msg->msgtype) { // advance the request/reply state machine
+		case 0: // plain BOOTP, no message type option
+			if (msg->op==BOOTREPLY) { // a BOOTREPLY concludes the exchange
+				tx->yiaddr=msg->yiaddr;
+				tx->awaiting=0;
+				tx->result=DHCPACK;
+				if (msg->yiaddr)
+					s->lease_ip=msg->yiaddr;
+			} else { // a BOOTREQUEST awaits a BOOTREPLY, which carries no type to name
+				tx->awaiting=SESS_AWAIT_ANY;
+				tx->deadline=tv_add_ms(msg->ts,m->timeout_ms);
+			}
+			break;
 		case DHCPDISCOVER:
 			tx->awaiting=DHCPOFFER;
 			tx->deadline=tv_add_ms(msg->ts,m->timeout_ms);
@@ -331,9 +344,12 @@ void sess_ingest(struct sess_model *m,const struct dhcp_msg *msg) { // {{{
 			tx->result=DHCPNAK;
 			break;
 		case DHCPRELEASE:
+			tx->awaiting=0;
+			tx->result=DHCPACK; // terminal, no reply expected: the lease ended normally
+			break;
 		case DHCPDECLINE:
 			tx->awaiting=0;
-			tx->result=DHCPACK; // terminal, no reply expected
+			tx->result=DHCPDECLINE; // terminal: the client refused the address
 			break;
 	}
 } // }}}
@@ -341,6 +357,8 @@ void sess_ingest(struct sess_model *m,const struct dhcp_msg *msg) { // {{{
 enum tx_state sess_tx_state(const struct sess_tx *tx,const struct timeval *now) { // {{{
 	if (tx->result==DHCPNAK)
 		return TX_NAK;
+	if (tx->result==DHCPDECLINE)
+		return TX_DECLINED;
 	if (tx->result==DHCPACK)
 		return TX_COMPLETE;
 	if (tx->awaiting) {
