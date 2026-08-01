@@ -148,7 +148,6 @@ static void tui_ingest(u_char *user,const struct pcap_pkthdr *h,const u_char *sp
 	msg.raw=f.payload; // kept as a copy by the model for the full packet view
 	msg.rawlen=f.plen;
 	msg.srcip=ntohl(f.srcip);
-	msg.dstip=ntohl(f.dstip);
 	memcpy(msg.vlan,f.vlan,sizeof msg.vlan);
 	msg.nvlan=f.nvlan;
 	sess_ingest(m,&msg);
@@ -1209,8 +1208,8 @@ int tui_run(pcap_t *cap,struct sess_model *m,int live,int (*keep)(const uint8_t 
 		if (pcap_setnonblock(cap,1,errbuf)==-1)
 			fprintf(stderr,"pcap_setnonblock: %s\n",errbuf);
 		pcfd=pcap_get_selectable_fd(cap);
-	} else
-		pcap_loop(cap,0,tui_ingest,(u_char *)m); // load the whole capture first
+	} else if (pcap_loop(cap,0,tui_ingest,(u_char *)m)==-1) // load the whole capture first; a truncated/corrupt file still loads up to the damage and is browsable
+		fprintf(stderr,"pcap_loop: %s\n",pcap_geterr(cap)); // before the alternate screen: briefly visible now, and again after the TUI exits
 
 	scr=yascreen_init(0,0);
 	if (!scr) {
