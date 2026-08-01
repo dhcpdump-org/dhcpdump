@@ -10,7 +10,6 @@
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/time.h>
 
 #include "version.h"
 #include "dhcpdump.h"
@@ -53,19 +52,19 @@ int tuimode=0; // -t, track sessions in the interactive TUI
 
 // }}}
 
-static inline int usage(const char *me) { // {{{
-	printf("dhcpdump "VERSION"\n");
-	printf("  Usage:\n");
-	printf("    %s -i <interface> [-h <macaddress>] [-H] [-Z <user>]" TUIOPT "\n",me);
-	printf("    %s -r <pcapfile>  [-h <macaddress>] [-H] [-Z <user>]" TUIOPT "\n",me);
-	printf("  Options:\n");
-	printf("    -h regexp filter by <macaddress>\n");
-	printf("    -H prints whole packet hex dump\n");
-	printf("    -Z drop privileges to <user> once the capture is open\n");
+static inline int usage(const char *me) { // {{{ printed only on errors: stderr, and make the exit status say error too
+	fprintf(stderr,"dhcpdump "VERSION"\n");
+	fprintf(stderr,"  Usage:\n");
+	fprintf(stderr,"    %s -i <interface> [-h <macaddress>] [-H] [-Z <user>]" TUIOPT "\n",me);
+	fprintf(stderr,"    %s -r <pcapfile>  [-h <macaddress>] [-H] [-Z <user>]" TUIOPT "\n",me);
+	fprintf(stderr,"  Options:\n");
+	fprintf(stderr,"    -h regexp filter by <macaddress>\n");
+	fprintf(stderr,"    -H prints whole packet hex dump\n");
+	fprintf(stderr,"    -Z drop privileges to <user> once the capture is open\n");
 #ifndef NO_TUI
-	printf("    -t track DHCP sessions and their transactions\n");
+	fprintf(stderr,"    -t track DHCP sessions and their transactions\n");
 #endif
-	return 0;
+	return 1;
 } // }}}
 
 static void drop_privs(const char *user) { // {{{ irrevocably become user; everything past this point parses hostile input and has no reason to be root
@@ -114,7 +113,6 @@ static int tui_keep(const uint8_t *data,int data_len) { // {{{ TUI ingest filter
 static void pcap_callback(uint8_t *user __attribute__((unused)),const struct pcap_pkthdr *h,const uint8_t *sp) { // {{{ classic per-packet line dump
 	struct dhcp_frame f;
 	char timestamp[40];
-	struct timeval tp;
 
 	if (dohexdump) {
 		dhcp_hexdump(sp,h->caplen);
@@ -127,9 +125,10 @@ static void pcap_callback(uint8_t *user __attribute__((unused)),const struct pca
 	if (hmask&&check_ch(f.payload,f.plen))
 		return;
 
-	gettimeofday(&tp,NULL);
-	strftime(timestamp,sizeof timestamp,"%Y-%m-%d %H:%M:%S.",localtime(&(tp.tv_sec)));
-	snprintf(timestamp+strlen(timestamp),sizeof timestamp-strlen(timestamp),"%03ld",tp.tv_usec/1000);
+	// the capture time, not the wall clock: a replayed file (-r) shows when
+	// its packets actually happened, and live captures stamp the same way
+	strftime(timestamp,sizeof timestamp,"%Y-%m-%d %H:%M:%S.",localtime(&h->ts.tv_sec));
+	snprintf(timestamp+strlen(timestamp),sizeof timestamp-strlen(timestamp),"%03ld",(long)h->ts.tv_usec/1000);
 
 	dhcp_print(&f,timestamp);
 } // }}}
@@ -200,11 +199,21 @@ int main(int argc,char **argv) { // {{{
 	}
 
 	if (interface!=NULL) {
-		if ((cap=pcap_open_live(interface,1500,1,100,errbuf))==NULL)
+		// snaplen counts from the link layer, so the Ethernet and VLAN headers
+		// would push a full-MTU DHCP message past a 1500 byte snaplen and cut
+		// its tail; 65535 covers any frame and costs nothing since libpcap 1.5
+		if ((cap=pcap_open_live(interface,65535,1,100,errbuf))==NULL)
 			errx(1,"pcap_open_live(): %s",errbuf);
 	} else {
 		if ((cap=pcap_open_offline(pcapfile,errbuf))==NULL)
 			errx(1,"pcap_open_offline(): %s",errbuf);
+	}
+	if (pcap_datalink(cap)!=DLT_EN10MB) { // dhcp_decap parses Ethernet framing only
+		const char *dn=pcap_datalink_val_to_name(pcap_datalink(cap));
+
+		errx(1,"%s: link type %s is not Ethernet%s",
+			interface?interface:pcapfile,dn?dn:"*unknown*",
+			interface?" (-i any captures in cooked framing, use a specific interface)":"");
 	}
 	if (pcap_compile(cap,&fp,CAPFILTER,1,0)<0) // optimize: the nested VLAN filter is 236 insns unoptimized, 45 optimized
 		errx(1,"pcap_compile: %s",pcap_geterr(cap));
@@ -218,10 +227,13 @@ int main(int argc,char **argv) { // {{{
 #ifndef NO_TUI
 	if (tuimode) {
 		struct sess_model model;
+		int rc;
 
 		sess_model_init(&model,SESS_TIMEOUT_MS);
-		tui_run(cap,&model,interface!=NULL,tui_keep);
+		rc=tui_run(cap,&model,interface!=NULL,tui_keep);
 		sess_model_free(&model);
+		if (rc<0) // e.g. a live capture that died; the error is already on stderr
+			return 1;
 	} else
 #endif
 	if (pcap_loop(cap,0,pcap_callback,NULL)==-1) // offline EOF returns 0, only -1 is an error
