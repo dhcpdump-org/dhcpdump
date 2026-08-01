@@ -86,7 +86,6 @@ struct sess { // one client, keyed by hardware address; kept in stable first-see
 	struct timeval first,last;
 	uint32_t lease_ip; // last assigned IP (from ACK), host order
 	uint32_t server_ip; // last server seen (option 54 / siaddr), host order
-	uint8_t last_msgtype; // most recent message type across the client
 	char hostname[64];
 	struct sess_tx *txs,*txs_tail; // transactions, newest first
 	int ntx;
