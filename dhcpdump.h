@@ -12,8 +12,10 @@
 //
 // The library turns a captured Ethernet frame into a DHCP payload
 // (dhcp_decap) and renders it in the classic dhcpdump text form (dhcp_print).
-// It keeps no global state and does no I/O of its own except the printing
-// calls, so it can be reused by both the line-dump CLI and the TUI.
+// The renderer keeps its output stream and glyph options in private globals,
+// set anew at each entry point, so calls must not be interleaved (fine for
+// single threaded use); it does no I/O beyond the printing calls and is
+// shared by the line-dump CLI and the TUI.
 
 #define DHCP_MAX_VLAN 2 // max stacked VLAN tags decoded (untagged, 802.1Q, QinQ)
 
