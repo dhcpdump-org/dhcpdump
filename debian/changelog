@@ -1,6 +1,6 @@
-dhcpdump (2.00pre1-1) UNRELEASED; urgency=medium
+dhcpdump (2.00-1) unstable; urgency=medium
 
-  * Latest upstream 2.00pre1
+  * Latest upstream 2.00
   * Bump standards to 4.7.4, no changes
   * Bump dh to 14
   * Add dep on libyascreen-dev
