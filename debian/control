@@ -19,3 +19,6 @@ Description: Parse DHCP packets from a network interface
  This package provides a tool for visualization of DHCP packets
  on a network interface to analyze DHCP client requests and
  server responses.
+ .
+ Version 2.00 adds an interactive TUI that shows packets
+ grouped by session.
