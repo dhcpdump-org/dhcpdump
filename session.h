@@ -14,7 +14,7 @@
 // DHCP session tracker. A session is one client, keyed by its hardware address;
 // within it, transactions are grouped by XID, and each transaction keeps the
 // ordered messages it saw plus a derived state (waiting / offered / bound /
-// NAK / timed-out). Storage is bounded so a long lived live capture cannot grow
+// NAK / declined / timed-out). Storage is bounded so a long lived live capture cannot grow
 // without limit. The tracker keeps no global state; all of it hangs off one
 // struct sess_model, so it can be embedded in either the CLI or the TUI.
 
@@ -34,8 +34,13 @@ enum tx_state {
 	TX_OFFERED, // an offer was seen, waiting for the client to proceed
 	TX_COMPLETE, // concluded, e.g. ACK/bound or RELEASE
 	TX_NAK, // server refused with NAK
+	TX_DECLINED, // client refused the address with DECLINE (e.g. found it in use)
 	TX_TIMEOUT, // a due reply never arrived before the deadline
 };
+
+// awaiting value for a plain BOOTP request: a reply is due, but BOOTP has no
+// message type option to name it - any BOOTREPLY in the transaction concludes it
+#define SESS_AWAIT_ANY 0xff
 
 // }}}
 
@@ -63,8 +68,8 @@ struct sess_tx { // one transaction (a single XID), newest first within a sessio
 	struct timeval start; // first message time
 	struct timeval last; // most recent message time
 	struct timeval deadline; // when the pending reply times out (valid if awaiting)
-	uint8_t awaiting; // reply msgtype still due, 0 if none
-	uint8_t result; // 0 in progress, DHCPACK bound, DHCPNAK refused
+	uint8_t awaiting; // reply msgtype still due (SESS_AWAIT_ANY for plain BOOTP), 0 if none
+	uint8_t result; // 0 in progress, DHCPACK bound/concluded, DHCPNAK refused, DHCPDECLINE declined
 	uint32_t yiaddr; // offered/assigned IP, host order
 	uint32_t selected_server; // server the client accepted (REQUEST option 54)
 	struct sess_msg *msgs,*msgs_tail; // messages, oldest first
