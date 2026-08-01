@@ -283,7 +283,6 @@ void sess_ingest(struct sess_model *m,const struct dhcp_msg *msg) { // {{{
 	if (!s)
 		return;
 	s->last=msg->ts;
-	s->last_msgtype=msg->msgtype;
 	if (msg->nvlan) { // remember the latest tagging; a lone untagged reply does not clear it
 		s->nvlan=msg->nvlan;
 		memcpy(s->vlan,msg->vlan,sizeof s->vlan);
