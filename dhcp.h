@@ -42,7 +42,6 @@ struct dhcp_msg {
 	const uint8_t *raw; // DHCP payload; set by the caller for a raw copy to be kept
 	int rawlen; // length of raw
 	uint32_t srcip; // L3 source, host order; set by the caller
-	uint32_t dstip; // L3 destination, host order; set by the caller
 	struct dhcp_vlan vlan[DHCP_MAX_VLAN]; // VLAN tags of the frame; set by the caller
 	int nvlan; // number of tags in vlan[]; set by the caller
 	uint8_t op; // BOOTREQUEST / BOOTREPLY
@@ -65,7 +64,7 @@ struct dhcp_msg {
 // {{{ api
 
 // Extract the DHCP fields from a UDP payload (data,data_len) into out. Only the
-// packet-derived fields are set; the caller fills ts/srcip/dstip/vlan/nvlan.
+// packet-derived fields are set; the caller fills ts/raw/srcip/vlan/nvlan.
 // Returns 1 if this is a usable DHCP message (fixed header present), 0 otherwise.
 int dhcp_parse(const uint8_t *data,int data_len,struct dhcp_msg *out);
 
