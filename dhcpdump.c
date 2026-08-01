@@ -608,11 +608,18 @@ static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode 
 				}
 				break;
 
-			case 93: // Client System Architecture
-				if (data[j+1]<2)
-					fprintf(g_out,"*malformed - too short*");
-				else
-					fprintf(g_out,"%d (%s)",data[j+3],data[j+3]>=strcountof(client_architecture_names)?"*unknown*":client_architecture_names[data[j+3]]);
+			case 93: // Client System Architecture: a list of 16 bit type values
+				if (data[j+1]<2||data[j+1]%2) {
+					fprintf(g_out,"*malformed*");
+					printHexBlock(data+j+2,data[j+1]);
+				} else
+					for (i=0;i<data[j+1];i+=2) {
+						unsigned v=((unsigned)data[j+2+i]<<8)|data[j+3+i];
+
+						if (i)
+							fprintf(g_out,"\n%*s",OPTVALCOL,"");
+						fprintf(g_out,"%u (%s)",v,v>=strcountof(client_architecture_names)?"*unknown*":client_architecture_names[v]);
+					}
 				break;
 
 			case 94: // Client Network Interface Identifier
@@ -863,19 +870,15 @@ void dhcp_fprint(FILE *out,const struct dhcp_frame *f,const char *ts) { // {{{ v
 	g_bar="|";
 	g_ovmark=0;
 
+	if (f->plen==0) // UDP with no payload at all: nothing to show
+		return;
+
 	if (f->nvlan)
 		fprintf(g_out,"  VLAN:");
 	for (i=0;i<f->nvlan;i++)
 		fprintf(g_out," %c:%04u",f->vlan[i].type,f->vlan[i].id);
 	if (f->nvlan)
 		fprintf(g_out,"\n");
-
-	if (f->plen==0)
-		return;
-	if (f->plen<DHCP_FIXED) { // the fixed BOOTP header (op..file) must be present
-		fprintf(stderr,"Ignored too short DHCP packet: %d bytes\n",f->plen);
-		return;
-	}
 
 	inet_ntop(AF_INET,&f->srcip,sip,sizeof sip);
 	inet_ntop(AF_INET,&f->dstip,dip,sizeof dip);
@@ -886,7 +889,10 @@ void dhcp_fprint(FILE *out,const struct dhcp_frame *f,const char *ts) { // {{{ v
 
 	fprintf(g_out,"  TIME: %s\n",ts);
 	fprintf(g_out,"    IP: %s (%s) > %s (%s)\n",sip,smac,dip,dmac);
-	print_bootp(f->payload,f->plen);
+	if (f->plen<DHCP_FIXED) // too short for the fixed BOOTP header (op..file): say so in the output itself, this renders to whatever stream the caller chose and stderr is not its business
+		fprintf(g_out,"*truncated - %d bytes*\n",f->plen);
+	else
+		print_bootp(f->payload,f->plen);
 	fprintf(g_out,"--------------------------------------------------------------------------------\n\n");
 	fflush(g_out);
 } // }}}
