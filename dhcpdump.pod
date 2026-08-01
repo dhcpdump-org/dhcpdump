@@ -15,15 +15,20 @@ easier checking and debugging.
 
 =head1 USAGE
 
-S<dhcpdump -i /dev/fxp0>
+S<dhcpdump -i eth0>
 
 If you want to filter a specific Client Hardware Address (CHADDR), then
 you can specify it as a regular expression:
 
-S<dhcpdump -i /dev/fxp0 -h ^00:c0:4f>
+S<dhcpdump -i eth0 -h ^00:c0:4f>
 
 This will display only the packets with Client Hardware Addresses
 which start with 00:c0:4f.
+
+The expression is matched against the full 16 byte CHADDR field formatted
+as colon separated hex pairs, so a 6 byte Ethernet address is followed by
+ten C<:00> pairs; anchored expressions need to account for that (C<^00:c0:4f>
+matches, C<4f:82:ac:7f$> does not).
 
 Option B<-H> will additionally show full packet hex dump.
 
@@ -49,7 +54,8 @@ into sessions by client hardware address, and within each client into
 transactions by transaction id (XID). Each transaction lists its messages
 (for example DISCOVER, OFFER, REQUEST, ACK) and a derived, colour coded state:
 I<wait> (a request is still awaiting its reply), I<offered>, I<complete>
-(bound), I<NAK>, or I<timeout> (a reply never arrived in time). Repeated
+(bound), I<NAK>, I<declined> (the client refused the address, e.g. found it
+in use), or I<timeout> (a reply never arrived in time). Repeated
 retransmissions are collapsed with a count, and an offer from a server the
 client did not ultimately pick is shown in yellow.
 
@@ -124,8 +130,8 @@ In the packet decode:
 
 =head1 OUTPUT
 
-  TIME: 15:45:02.084272
-    IP: 0.0.0.0.68 (0:c0:4f:82:ac:7f) > 255.255.255.255.67 (ff:ff:ff:ff:ff:ff)
+  TIME: 2026-08-02 15:45:02.084
+    IP: 0.0.0.0 (00:c0:4f:82:ac:7f) > 255.255.255.255 (ff:ff:ff:ff:ff:ff)
     OP: 1 (BOOTPREQUEST)
  HTYPE: 1 (Ethernet)
   HLEN: 6
@@ -138,16 +144,16 @@ YIADDR: 0.0.0.0
 SIADDR: 0.0.0.0
 GIADDR: 0.0.0.0
 CHADDR: 00:c0:4f:82:ac:7f:00:00:00:00:00:00:00:00:00:00
- SNAME: .
- FNAME: .
+ SNAME:
+ FNAME:
 OPTION:  53 (  1) DHCP message type         3 (DHCPREQUEST)
-OPTION:  54 (  4) Server identifier         130.139.64.101
-OPTION:  50 (  4) Request IP address        130.139.64.143
-OPTION:  55 (  7) Parameter Request List
-            1   (Subnet mask)
-            3   (Router)
-            58  (T1)
-            59  (T2)
+OPTION:  54 (  4) DHCP Server identifier    130.139.64.101
+OPTION:  50 (  4) Requested IP address      130.139.64.143
+OPTION:  55 (  4) Parameter Request List
+                  1   (Subnet mask)
+                  3   (Router)
+                  58  (Renewal Time T1)
+                  59  (Rebinding Time T2)
 
 At the option field, the first field is the value of the option,
 the second one (between brackets) is the length of the option-datafield,
@@ -156,12 +162,17 @@ data of the option.
 
 =head1 RETURN VALUES
 
-Always 0.
+0 on a normal run, 1 on any error: bad usage, capture setup failure, or a
+live capture that dies mid-run.
 
 =head1 NOTES
 
 Privileged access is often needed for accessing the interface. Use B<-Z> to
 give those privileges up again as soon as the interface is open.
+
+Only Ethernet captures are supported. Notably, the Linux B<any>
+pseudo-interface does not capture in Ethernet framing and is rejected;
+capture on a specific interface instead.
 
 =head1 BUGS
 
