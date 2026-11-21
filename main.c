@@ -10,6 +10,10 @@
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/syscall.h>
+#include <linux/capability.h>
+#endif
 
 #include "version.h"
 #include "dhcpdump.h"
@@ -67,22 +71,35 @@ static inline int usage(const char *me) { // {{{ printed only on errors: stderr,
 	return 1;
 } // }}}
 
+static void drop_caps(void) { // {{{ clear every capability: a binary given file capabilities (setcap) holds them without being root, so changing (or keeping) the uid alone gives nothing up
+#ifdef __linux__
+	struct __user_cap_header_struct hdr={_LINUX_CAPABILITY_VERSION_3,0};
+	struct __user_cap_data_struct data[_LINUX_CAPABILITY_U32S_3];
+
+	memset(data,0,sizeof data); // empty effective, permitted and inheritable sets; the kernel empties the ambient set along with them
+	if (syscall(SYS_capset,&hdr,data)<0)
+		err(1,"-Z: capset");
+#endif
+} // }}}
+
 static void drop_privs(const char *user) { // {{{ irrevocably become user; everything past this point parses hostile input and has no reason to be root
 	struct passwd *pw=getpwnam(user);
 
 	if (!pw)
 		errx(1,"-Z: no such user \"%s\"",user);
-	if (geteuid()) { // unprivileged already: nothing to give up, but the promise still has to hold
+	if (geteuid()) { // no uid to give up, but capabilities may be held (setcap), and the promise still has to hold
 		if (geteuid()!=pw->pw_uid)
 			errx(1,"-Z: not privileged enough to become \"%s\"",user);
-		return;
+	} else {
+		if (setgroups(1,&pw->pw_gid)<0) // supplementary groups first, they need the privileges being dropped
+			err(1,"-Z: setgroups");
+		if (setgid(pw->pw_gid)<0) // gid before uid, the other order cannot be undone
+			err(1,"-Z: setgid");
+		if (setuid(pw->pw_uid)<0)
+			err(1,"-Z: setuid");
 	}
-	if (setgroups(1,&pw->pw_gid)<0) // supplementary groups first, they need the privileges being dropped
-		err(1,"-Z: setgroups");
-	if (setgid(pw->pw_gid)<0) // gid before uid, the other order cannot be undone
-		err(1,"-Z: setgid");
-	if (setuid(pw->pw_uid)<0)
-		err(1,"-Z: setuid");
+	if (pw->pw_uid) // -Z root asks to stay root, capabilities included
+		drop_caps();
 	if (pw->pw_uid&&setuid(0)!=-1) // regaining root must be impossible now
 		errx(1,"-Z: privileges were not dropped");
 } // }}}

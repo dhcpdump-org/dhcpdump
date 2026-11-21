@@ -45,7 +45,10 @@ runs as root:
 S<dhcpdump -i eth0 -Z nobody>
 
 The supplementary groups, the group id and the user id are all changed, and
-the drop is verified to be irreversible before any packet is read.
+the drop is verified to be irreversible before any packet is read. On Linux
+every capability is cleared as well, so B<-Z> also gives up the
+I<cap_net_raw> of a binary granted it with B<setcap>(8) and started by an
+unprivileged user; B<-Z> then names that same user.
 
 =head1 TUI (SESSION TRACKING)
 
