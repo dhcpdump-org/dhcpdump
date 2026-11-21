@@ -261,6 +261,9 @@ const char *dhcp_options[] = {
 /* 254 */ "Reserved for private use",
 /* 255 */ "End",
 };
+// Indexed directly with the option code byte from the packet, unlike the
+// tables below (bounds checked with strcountof), so it must name every code.
+_Static_assert(sizeof dhcp_options/sizeof *dhcp_options==256,"dhcp_options must have exactly one entry per option code 0-255");
 
 const char *dhcp_message_types[] = {
 /*   0 */ "undefined",
