@@ -228,25 +228,22 @@ static inline void printReqParmList(const uint8_t *data,int len) { // {{{ print 
 		fprintf(g_out,"\n%*s%-3d (%s)",OPTLISTCOL,"",data[i],dhcp_options[data[i]]);
 } // }}}
 
-static inline void printIPaddressCompactMaskAddress(const uint8_t *data,int len) { // {{{ print the data as series of IP address and masks
-	int i,j,isok=1;
+static int croutes_ok(const uint8_t *data,int len) { // {{{ a well formed series of RFC 3442 compact routes: prefix length, its significant octets, router
+	int i,j;
 
 	if (len<5)
-		isok=0;
-	else
-		for (i=0;i<len;i++) {
-			j=4+(data[i]+7)/8;
-			if (data[i]>32||len<i+j+1) {
-				isok=0;
-				break;
-			}
-			i+=j;
-		}
-	if (!isok) {
-		fprintf(g_out,"Malformed\n%44s","");
-		printHex(data,len);
-		return;
+		return 0;
+	for (i=0;i<len;i++) {
+		j=4+(data[i]+7)/8;
+		if (data[i]>32||len<i+j+1)
+			return 0;
+		i+=j;
 	}
+	return 1;
+} // }}}
+
+static inline void printIPaddressCompactMaskAddress(const uint8_t *data,int len) { // {{{ print the data as series of IP address and masks (croutes_ok must hold)
+	int i,j;
 
 	for (i=0;i<len;i++) {
 		j=4+(data[i]+7)/8;
@@ -260,101 +257,48 @@ static inline void printIPaddressCompactMaskAddress(const uint8_t *data,int len)
 	}
 } // }}}
 
-static inline int opt_is_inline(int o) { // {{{ options whose value always starts on the header line, so the name is padded out to OPTVALCOL (keep in sync with the switch in print_option_area)
-	switch (o) {
-		case 1:
-		case 2:
-		case 3:
-		case 4:
-		case 5:
-		case 6:
-		case 7:
-		case 8:
-		case 9:
-		case 10:
-		case 11:
-		case 13:
-		case 16:
-		case 19:
-		case 20:
-		case 21:
-		case 22:
-		case 23:
-		case 24:
-		case 25:
-		case 26:
-		case 27:
-		case 28:
-		case 29:
-		case 30:
-		case 31:
-		case 32:
-		case 33:
-		case 34:
-		case 35:
-		case 36:
-		case 37:
-		case 38:
-		case 39:
-		case 41:
-		case 42:
-		case 44:
-		case 45:
-		case 46:
-		case 48:
-		case 49:
-		case 50:
-		case 51:
-		case 52:
-		case 53:
-		case 54:
-		case 57:
-		case 58:
-		case 59:
-		case 63:
-		case 65:
-		case 68:
-		case 69:
-		case 70:
-		case 71:
-		case 72:
-		case 73:
-		case 74:
-		case 75:
-		case 76:
-		case 78:
-		case 81:
-		case 85:
-		case 91:
-		case 92:
-		case 93:
-		case 94:
-		case 108:
-		case 116:
-		case 118:
-		case 121:
-		case 145:
-		case 148:
-		case 150:
-		case 152:
-		case 153:
-		case 154:
-		case 155:
-		case 162:
-		case 211:
-		case 249:
-			return 1;
+static const char *opt_malformed(int type,const uint8_t *v,int len) { // {{{ why a value does not fit its option type, NULL if it does; every renderer decides by this, so they agree on what is malformed
+	switch (type) {
+		case OT_ADDR:
+		case OT_SECS:
+		case OT_TIMEOFFSET:
+			return len<4?"too short":NULL;
+		case OT_U16:
+			return len<2?"too short":NULL;
+		case OT_U8:
+		case OT_TTL:
+		case OT_ENUM:
+		case OT_HEX:
+			return len<1?"too short":NULL;
+		case OT_FQDN: // flags and both rcodes are mandatory
+		case OT_NDI:
+			return len<3?"too short":NULL;
+		case OT_ADDRS:
+			return len<4?"too short":len%4?"length not a multiple of 4":NULL;
+		case OT_ADDRMASKS:
+		case OT_ROUTES:
+			return len<8?"too short":len%8?"length not a multiple of 8":NULL;
+		case OT_U16S:
+		case OT_ARCH:
+			return len<2?"too short":len%2?"length not a multiple of 2":NULL;
+		case OT_CROUTES:
+			return croutes_ok(v,len)?NULL:"bad route encoding";
 	}
-	return 0;
+	return NULL; // text, the parameter request list and relay sub-options take any length
 } // }}}
 
-static inline int opt_is_str(int o) { // {{{ options rendered as text when the value is fully printable and as a hex+ascii block below the header otherwise: everything without a structured renderer of its own in print_option_area
-	switch (o) {
-		case 55: // Parameter Request List
-		case 82: // Relay Agent Information; both render their own lists below the header
+static inline int opt_is_inline(int o) { // {{{ options whose value always starts on the header line, so the name is padded out to OPTVALCOL: every structured type except the two that list their items below the header
+	switch (opt_info[o].type) {
+		case OT_TEXT:
+		case OT_PRL:
+		case OT_RELAY:
 			return 0;
 	}
-	return !opt_is_inline(o);
+	return 1;
+} // }}}
+
+static inline int opt_is_str(int o) { // {{{ options rendered as text when the value is fully printable and as a hex+ascii block below the header otherwise: everything without a structured type
+	return opt_info[o].type==OT_TEXT;
 } // }}}
 
 static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode one TLV option area: the options field past the cookie, or an overloaded sname/file field (RFC 2131 option overload)
@@ -362,6 +306,11 @@ static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode 
 	int i,j=0,valcol,nl;
 
 	while (j<data_len&&data[j]!=255) {
+		const struct opt_info *oi;
+		const uint8_t *v;
+		const char *why;
+		int len;
+
 		if (data[j]==0) { // pad option, carries neither a length nor a value byte
 			fprintf(g_out,"OPTION: %3d (  0) %s\n",data[j],dhcp_options[data[j]]);
 			j++;
@@ -371,218 +320,128 @@ static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode 
 			fprintf(g_out,"OPTION: %3d       *malformed - truncated option*\n",data[j]);
 			break;
 		}
+		oi=&opt_info[data[j]];
+		v=data+j+2;
+		len=data[j+1];
+		why=opt_malformed(oi->type,v,len);
 		nl=(int)strlen(dhcp_options[data[j]]);
 		valcol=18+(nl>26?nl+1:26); // where the value starts (a name too long for the pad pushes it right, keeping one separating space)
 		// pad the name out to the value column only when a value actually
 		// follows on this line, otherwise the padding is trailing whitespace
-		if (opt_is_inline(data[j])||(opt_is_str(data[j])&&data[j+1]>0&&is_printable(data+j+2,data[j+1])))
-			fprintf(g_out,"OPTION: %3d (%3d) %-*s",data[j],data[j+1],nl>26?nl+1:26,dhcp_options[data[j]]);
+		if (opt_is_inline(data[j])||(opt_is_str(data[j])&&len>0&&is_printable(v,len)))
+			fprintf(g_out,"OPTION: %3d (%3d) %-*s",data[j],len,nl>26?nl+1:26,dhcp_options[data[j]]);
 		else // value rendered on its own lines below: header carries only the name
-			fprintf(g_out,"OPTION: %3d (%3d) %s",data[j],data[j+1],dhcp_options[data[j]]);
+			fprintf(g_out,"OPTION: %3d (%3d) %s",data[j],len,dhcp_options[data[j]]);
 
-		switch (data[j]) {
-			default: // no structured renderer: a wholly printable value prints as text on the header line; the typically binary ones (43 vendor specific, 61 client id, ...) fail that check and drop to a hex+ascii block
-				if (data[j+1]>0&&is_printable(data+j+2,data[j+1]))
-					printWrapped(data+j+2,data[j+1],valcol,OPTVALCOL,OPTWRAPCOL);
+		switch (oi->type) { // renderers by value type (opt_info in dhcp_options.h); a malformed value says so instead
+			default: // OT_TEXT: a wholly printable value prints as text on the header line; the typically binary ones (43 vendor specific, 61 client id, ...) fail that check and drop to a hex+ascii block
+				if (len>0&&is_printable(v,len))
+					printWrapped(v,len,valcol,OPTVALCOL,OPTWRAPCOL);
 				else
-					printHexBlock(data+j+2,data[j+1]);
+					printHexBlock(v,len);
 				break;
 
-			case 1: // Subnetmask
-			case 16: // Swap server
-			case 28: // Broadcast address
-			case 32: // Router solicitation
-			case 50: // Requested IP address
-			case 54: // Server identifier
-			case 118: // Subnet selection option
-				if (data[j+1]<4)
+			case OT_ADDR:
+				if (why)
 					fprintf(g_out,"*malformed - too short*");
 				else
-					printIPaddress(data+j+2);
+					printIPaddress(v);
 				break;
 
-			case 3: // Routers
-			case 4: // Time servers
-			case 5: // Name servers
-			case 6: // DNS server
-			case 7: // Log server
-			case 8: // Cookie server
-			case 9: // LPR server
-			case 10: // Impress server
-			case 11: // Resource location server
-			case 41: // NIS servers
-			case 42: // NTP servers
-			case 44: // NetBIOS name server
-			case 45: // NetBIOS datagram distribution server
-			case 48: // X Window System font server
-			case 49: // X Window System display server
-			case 65: // NIS+ servers
-			case 68: // Mobile IP home agent
-			case 69: // SMTP server
-			case 70: // POP3 server
-			case 71: // NNTP server
-			case 72: // WWW server
-			case 73: // Finger server
-			case 74: // IRC server
-			case 75: // StreetTalk server
-			case 76: // StreetTalk directory assistance server
-			case 78: // Directory Agent
-			case 85: // NDS server
-			case 92: // Associated IP
-			case 148: // DOTS Address
-			case 150: // TFTP server address
-			case 162: // Encrypted DNS Server
-				if (data[j+1]<4||data[j+1]%4) { // not a whole number of addresses: dump instead of inventing one
+			case OT_ADDRS:
+				if (why) { // not a whole number of addresses: dump instead of inventing one
 					fprintf(g_out,"*malformed*");
-					printHexBlock(data+j+2,data[j+1]);
+					printHexBlock(v,len);
 				} else
-					printList(data+j+2,data[j+1],4,' ');
+					printList(v,len,4,' ');
 				break;
 
-			case 21: // Policy filter
-				if (data[j+1]<8||data[j+1]%8) {
+			case OT_ADDRMASKS:
+			case OT_ROUTES:
+				if (why) {
 					fprintf(g_out,"*malformed*");
-					printHexBlock(data+j+2,data[j+1]);
+					printHexBlock(v,len);
 				} else
-					printList(data+j+2,data[j+1],8,'/');
+					printList(v,len,8,oi->type==OT_ADDRMASKS?'/':' ');
 				break;
 
-			case 33: // Static route
-				if (data[j+1]<8||data[j+1]%8) {
+			case OT_U16S:
+				if (why) {
 					fprintf(g_out,"*malformed*");
-					printHexBlock(data+j+2,data[j+1]);
+					printHexBlock(v,len);
 				} else
-					printList(data+j+2,data[j+1],8,' ');
+					printList(v,len,2,' ');
 				break;
 
-			case 25: // Path MTU plateau table
-				if (data[j+1]<2||data[j+1]%2) {
-					fprintf(g_out,"*malformed*");
-					printHexBlock(data+j+2,data[j+1]);
-				} else
-					printList(data+j+2,data[j+1],2,' ');
-				break;
-
-			case 13: // bootfile size
-			case 22: // Maximum datagram reassembly size
-			case 26: // Interface MTU
-			case 57: // Maximum DHCP message size
-				if (data[j+1]<2)
+			case OT_U16:
+				if (why)
 					fprintf(g_out,"*malformed - too short*");
 				else
-					print16bits(data+j+2);
+					print16bits(v);
 				break;
 
-			case 19: // IP forwarding enabled/disable
-			case 20: // Non-local source routing
-			case 27: // All subnets local
-			case 29: // Perform mask discovery
-			case 30: // Mask supplier
-			case 31: // Perform router discovery
-			case 34: // Trailer encapsulation
-			case 39: // TCP keepalive garbage
-				if (data[j+1]<1)
+			case OT_U8:
+				if (why)
 					fprintf(g_out,"*malformed - too short*");
 				else
-					fprintf(g_out,"%d (%s)",data[j+2],data[j+2]>=strcountof(enabledisable)?"*unknown*":enabledisable[data[j+2]]);
+					print8bits(v);
 				break;
 
-			case 23: // Default IP TTL
-				if (data[j+1]<1)
+			case OT_TTL:
+				if (why)
 					fprintf(g_out,"*malformed - too short*");
 				else
-					printTime8(data+j+2);
+					printTime8(v);
 				break;
 
-			case 37: // TCP default TTL
-			case 145: // FORCERENEW_NONCE_CAPABLE
-				if (data[j+1]<1)
+			case OT_SECS:
+			case OT_TIMEOFFSET:
+				if (why)
 					fprintf(g_out,"*malformed - too short*");
 				else
-					print8bits(data+j+2);
+					printTime32(v);
 				break;
 
-			case 46: // NetBIOS over TCP/IP node type
-				if (data[j+1]<1)
+			case OT_ENUM:
+				if (why)
 					fprintf(g_out,"*malformed - too short*");
 				else
-					fprintf(g_out,"%d (%s)",data[j+2],data[j+2]>=strcountof(netbios_node_type)?"*unknown*":netbios_node_type[data[j+2]]);
+					fprintf(g_out,"%d (%s)",v[0],v[0]>=oi->nnames?"*unknown*":oi->names[v[0]]);
 				break;
 
-			case 2: // Time offset
-			case 24: // Path MTU aging timeout
-			case 35: // ARP cache timeout
-			case 38: // TCP keepalive interval
-			case 51: // IP address leasetime
-			case 58: // T1
-			case 59: // T2
-			case 91: // Client last transaction time
-			case 108: // IPv6-Only preferred
-			case 152: // base-time
-			case 153: // start-time-of-state
-			case 154: // query-start-time
-			case 155: // query-end-time
-			case 211: // reboot-time
-				if (data[j+1]<4)
+			case OT_HEX:
+				if (why)
 					fprintf(g_out,"*malformed - too short*");
 				else
-					printTime32(data+j+2);
+					printHex(v,len);
 				break;
 
-			case 36: // Ethernet encapsulation
-				if (data[j+1]<1)
-					fprintf(g_out,"*malformed - too short*");
-				else
-					fprintf(g_out,"%d (%s)",data[j+2],data[j+2]>=strcountof(ethernet_encapsulation)?"*unknown*":ethernet_encapsulation[data[j+2]]);
+			case OT_PRL:
+				printReqParmList(v,len);
 				break;
 
-			case 52: // Option overload
-				if (data[j+1]<1)
-					fprintf(g_out,"*malformed - too short*");
-				else
-					fprintf(g_out,"%d (%s)",data[j+2],data[j+2]>=strcountof(option_overload)?"*unknown*":option_overload[data[j+2]]);
-				break;
-
-			case 53: // DHCP message type
-				if (data[j+1]<1)
-					fprintf(g_out,"*malformed - too short*");
-				else
-					fprintf(g_out,"%d (%s)",data[j+2],data[j+2]>=strcountof(dhcp_message_types)?"*unknown*":dhcp_message_types[data[j+2]]);
-				break;
-
-			case 55: // Parameter Request List
-				printReqParmList(data+j+2,data[j+1]);
-				break;
-
-			case 63: // Netware/IP domain information
-				if (data[j+1]<1)
-					fprintf(g_out,"*malformed - too short*");
-				else
-					printHex(data+j+2,data[j+1]);
-				break;
-
-			case 81: // Client FQDN
-				if (data[j+1]<3) { // flags + 2 rcode bytes are mandatory
+			case OT_FQDN:
+				if (why) {
 					fprintf(g_out,"*malformed - too short*");
 					break;
 				}
-				print8bits(data+j+2);
+				print8bits(v);
 				fprintf(g_out,"-");
-				print8bits(data+j+3);
+				print8bits(v+1);
 				fprintf(g_out,"-");
-				print8bits(data+j+4);
-				if (data[j+1]==3) // flags and rcodes only, no name follows
+				print8bits(v+2);
+				if (len==3) // flags and rcodes only, no name follows
 					break;
-				if (is_printable(data+j+5,data[j+1]-3)) {
+				if (is_printable(v+3,len-3)) {
 					fprintf(g_out," ");
-					strncpy(buf,(const char *)&data[j+5],data[j+1]-3);
-					buf[data[j+1]-3]=0;
+					strncpy(buf,(const char *)v+3,len-3);
+					buf[len-3]=0;
 					fprintf(g_out,"%s",buf);
 				} else // the E flag makes the name DNS wire format; escapes in a plain name are handled the same way
-					printHexBlock(data+j+5,data[j+1]-3);
+					printHexBlock(v+3,len-3);
 				break;
 
-			case 82: // Relay Agent Information
+			case OT_RELAY:
 				for (i=j+2;i<j+data[j+1]+2;) {
 					const char *sn;
 
@@ -608,43 +467,38 @@ static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode 
 				}
 				break;
 
-			case 93: // Client System Architecture: a list of 16 bit type values
-				if (data[j+1]<2||data[j+1]%2) {
+			case OT_ARCH: // a list of 16 bit type values
+				if (why) {
 					fprintf(g_out,"*malformed*");
-					printHexBlock(data+j+2,data[j+1]);
+					printHexBlock(v,len);
 				} else
-					for (i=0;i<data[j+1];i+=2) {
-						unsigned v=((unsigned)data[j+2+i]<<8)|data[j+3+i];
+					for (i=0;i<len;i+=2) {
+						unsigned a=((unsigned)v[i]<<8)|v[i+1];
 
 						if (i)
 							fprintf(g_out,"\n%*s",OPTVALCOL,"");
-						fprintf(g_out,"%u (%s)",v,v>=strcountof(client_architecture_names)?"*unknown*":client_architecture_names[v]);
+						fprintf(g_out,"%u (%s)",a,a>=strcountof(client_architecture_names)?"*unknown*":client_architecture_names[a]);
 					}
 				break;
 
-			case 94: // Client Network Interface Identifier
-				if (data[j+1]<3)
+			case OT_NDI:
+				if (why)
 					fprintf(g_out,"*malformed - too short*");
 				else
-					fprintf(g_out,"%u (Rev %d.%d)",(unsigned)(data[j+3]<<8|data[j+4]),data[j+3],data[j+4]);
+					fprintf(g_out,"%u (Rev %d.%d)",(unsigned)(v[1]<<8|v[2]),v[1],v[2]);
 				break;
 
-			case 116: // Auto-Configure
-				if (data[j+1]<1)
-					fprintf(g_out,"*malformed - too short*");
-				else
-					fprintf(g_out,"%d (%s)",data[j+2],data[j+2]>=strcountof(auto_configure)?"*unknown*":auto_configure[data[j+2]]);
+			case OT_CROUTES:
+				if (why) {
+					fprintf(g_out,"Malformed\n%44s","");
+					printHex(v,len);
+				} else
+					printIPaddressCompactMaskAddress(v,len);
 				break;
-
-			case 121: // Classless static route
-			case 249: // MSFT - Classless route
-				printIPaddressCompactMaskAddress(data+j+2,data[j+1]);
-				break;
-
 		}
 		fprintf(g_out,"\n");
 
-		j+=data[j+1]+2;
+		j+=len+2;
 	}
 } // }}}
 
