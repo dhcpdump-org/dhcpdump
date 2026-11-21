@@ -1,5 +1,6 @@
 // {{{ includes
 
+#include <time.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -11,6 +12,7 @@
 
 #include "dhcp_options.h"
 #include "dhcpdump.h"
+#include "json.h"
 
 // }}}
 
@@ -502,11 +504,9 @@ static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode 
 	}
 } // }}}
 
-static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOOTP header and the options (caller ensures data_len>=DHCP_FIXED)
-	int i,j,overload=0;
+static int find_overload(const uint8_t *data,int data_len) { // {{{ option 52 value (bit 0: file, bit 1: sname hold options), 0 if absent (caller ensures data_len>=DHCP_FIXED)
+	int j,overload=0;
 
-	// Option 52 relocates options into the sname/file header fields; find it
-	// first, it decides below whether those fields hold names or options.
 	if (data_len>=DHCP_FIXED+4&&!memcmp(data+DHCP_FIXED,dhcp_cookie,4)) {
 		j=DHCP_FIXED+4;
 		while (j<data_len&&data[j]!=255) {
@@ -521,6 +521,13 @@ static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOO
 			j+=data[j+1]+2;
 		}
 	}
+	return overload;
+} // }}}
+
+static void print_bootp(const uint8_t *data,int data_len) { // {{{ print the BOOTP header and the options (caller ensures data_len>=DHCP_FIXED)
+	// Option 52 relocates options into the sname/file header fields; find it
+	// first, it decides below whether those fields hold names or options.
+	int i,overload=find_overload(data,data_len);
 
 	fprintf(g_out,"    OP: %d (%s)\n",data[0],data[0]>=strcountof(operands)?"*unknown*":operands[data[0]]);
 	fprintf(g_out," HTYPE: %d (%s)\n",data[1],data[1]>=strcountof(htypes)?"*unknown*":htypes[data[1]]);
@@ -777,3 +784,317 @@ void dhcp_fprint_payload(FILE *out,const uint8_t *data,int data_len,const char *
 	fprintf(g_out,"\n");
 	hexdump_c(data,data_len);
 } // }}}
+
+// {{{ JSON output (-j)
+
+static inline uint32_t be32(const uint8_t *p) { // {{{ read 4 network order bytes into a host order value
+	return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
+} // }}}
+
+static void json_value(struct jw *w,int code,const uint8_t *v,int len) { // {{{ the value of one option, typed by opt_info; malformed exactly when the text output says so
+	const struct opt_info *oi=&opt_info[code];
+	const char *why=opt_malformed(oi->type,v,len);
+	int i;
+
+	if (why) {
+		jw_str(w,"malformed",why);
+		jw_hex(w,"hex",v,len);
+		return;
+	}
+	switch (oi->type) {
+		default: // OT_TEXT; a zero length option (e.g. rapid commit) has no value at all
+			if (len>0&&is_printable(v,len))
+				jw_strn(w,"value",v,len);
+			else if (len>0)
+				jw_hex(w,"hex",v,len);
+			break;
+		case OT_ADDR:
+			jw_ip(w,"value",v);
+			break;
+		case OT_ADDRS:
+			jw_arr(w,"value");
+			for (i=0;i+4<=len;i+=4)
+				jw_ip(w,NULL,v+i);
+			jw_end(w);
+			break;
+		case OT_ADDRMASKS:
+		case OT_ROUTES:
+			jw_arr(w,"value");
+			for (i=0;i+8<=len;i+=8) {
+				jw_obj(w,NULL);
+				jw_ip(w,oi->type==OT_ADDRMASKS?"addr":"dest",v+i);
+				jw_ip(w,oi->type==OT_ADDRMASKS?"mask":"router",v+i+4);
+				jw_end(w);
+			}
+			jw_end(w);
+			break;
+		case OT_U8:
+		case OT_TTL:
+			jw_uint(w,"value",v[0]);
+			break;
+		case OT_U16:
+			jw_uint(w,"value",be16(v));
+			break;
+		case OT_U16S:
+			jw_arr(w,"value");
+			for (i=0;i+2<=len;i+=2)
+				jw_uint(w,NULL,be16(v+i));
+			jw_end(w);
+			break;
+		case OT_SECS:
+			jw_uint(w,"value",be32(v));
+			break;
+		case OT_TIMEOFFSET:
+			jw_int(w,"value",(int32_t)be32(v));
+			break;
+		case OT_ENUM:
+			jw_uint(w,"value",v[0]);
+			if (v[0]<oi->nnames&&oi->names[v[0]][0])
+				jw_str(w,"text",oi->names[v[0]]);
+			break;
+		case OT_HEX:
+			jw_hex(w,"hex",v,len);
+			break;
+		case OT_PRL:
+			jw_arr(w,"value");
+			for (i=0;i<len;i++) {
+				jw_obj(w,NULL);
+				jw_uint(w,"code",v[i]);
+				jw_str(w,"name",dhcp_options[v[i]]);
+				jw_end(w);
+			}
+			jw_end(w);
+			break;
+		case OT_FQDN:
+			jw_obj(w,"value");
+			jw_uint(w,"flags",v[0]);
+			jw_uint(w,"rcode1",v[1]);
+			jw_uint(w,"rcode2",v[2]);
+			if (len>3) { // the E flag makes the name DNS wire format, which fails the printable check
+				if (is_printable(v+3,len-3))
+					jw_strn(w,"name",v+3,len-3);
+				else
+					jw_hex(w,"name_hex",v+3,len-3);
+			}
+			jw_end(w);
+			break;
+		case OT_RELAY:
+			jw_arr(w,"value");
+			for (i=0;i<len;) {
+				jw_obj(w,NULL);
+				jw_uint(w,"code",v[i]);
+				if (v[i]<strcountof(relayagent_suboptions))
+					jw_str(w,"name",relayagent_suboptions[v[i]]);
+				if (i+2>len) { // sub-option code and length must both be present
+					jw_str(w,"malformed","truncated");
+					jw_hex(w,"hex",v+i+1,len-i-1);
+					jw_end(w);
+					break;
+				}
+				jw_uint(w,"len",v[i+1]);
+				if (i+2+v[i+1]>len) {
+					jw_str(w,"malformed","too large");
+					jw_hex(w,"hex",v+i+2,len-i-2);
+					jw_end(w);
+					break;
+				}
+				if (v[i+1]>0&&is_printable(v+i+2,v[i+1]))
+					jw_strn(w,"value",v+i+2,v[i+1]);
+				else if (v[i+1]>0)
+					jw_hex(w,"hex",v+i+2,v[i+1]);
+				jw_end(w);
+				i+=v[i+1]+2;
+			}
+			jw_end(w);
+			break;
+		case OT_ARCH:
+			jw_arr(w,"value");
+			for (i=0;i+2<=len;i+=2) {
+				unsigned a=be16(v+i);
+
+				jw_obj(w,NULL);
+				jw_uint(w,"value",a);
+				if (a<strcountof(client_architecture_names))
+					jw_str(w,"text",client_architecture_names[a]);
+				jw_end(w);
+			}
+			jw_end(w);
+			break;
+		case OT_NDI:
+			jw_obj(w,"value");
+			jw_uint(w,"type",v[0]);
+			jw_uint(w,"major",v[1]);
+			jw_uint(w,"minor",v[2]);
+			jw_end(w);
+			break;
+		case OT_CROUTES: // croutes_ok (via opt_malformed) guarantees every prefix is at most 32 bits and in bounds
+			jw_arr(w,"value");
+			for (i=0;i<len;) {
+				int bits=v[i],sig=(bits+7)/8;
+				uint8_t dest[4]={0,0,0,0};
+				char b[24];
+
+				memcpy(dest,v+i+1,sig);
+				snprintf(b,sizeof b,"%u.%u.%u.%u/%d",dest[0],dest[1],dest[2],dest[3],bits);
+				jw_obj(w,NULL);
+				jw_str(w,"dest",b);
+				jw_ip(w,"via",v+i+1+sig);
+				jw_end(w);
+				i+=1+sig+4;
+			}
+			jw_end(w);
+			break;
+	}
+} // }}}
+
+static void json_option_area(struct jw *w,const uint8_t *data,int data_len,const char *source) { // {{{ one TLV option area into the open options array, walked like print_option_area; pad and end are not listed
+	int j=0;
+
+	while (j<data_len&&data[j]!=255) {
+		if (data[j]==0) {
+			j++;
+			continue;
+		}
+		jw_obj(w,NULL);
+		jw_uint(w,"code",data[j]);
+		jw_str(w,"name",dhcp_options[data[j]]);
+		if (j+2>data_len||j+2+data[j+1]>data_len) { // length byte or part of the value not captured
+			int vs=j+2<=data_len?j+2:data_len;
+
+			if (j+2<=data_len)
+				jw_uint(w,"len",data[j+1]);
+			jw_str(w,"malformed","truncated");
+			jw_hex(w,"hex",data+vs,data_len-vs);
+			if (source)
+				jw_str(w,"source",source);
+			jw_end(w);
+			break;
+		}
+		jw_uint(w,"len",data[j+1]);
+		json_value(w,data[j],data+j+2,data[j+1]);
+		if (source)
+			jw_str(w,"source",source);
+		jw_end(w);
+		j+=data[j+1]+2;
+	}
+} // }}}
+
+static void json_name_field(struct jw *w,const char *key,const uint8_t *p,int size,int overloaded) { // {{{ sname/file: text when printable, key_hex otherwise, null when it carries options instead
+	int n=(int)strnlen((const char *)p,size);
+	char hk[16];
+
+	if (overloaded)
+		jw_null(w,key);
+	else if (is_printable(p,n))
+		jw_strn(w,key,p,n);
+	else {
+		snprintf(hk,sizeof hk,"%s_hex",key);
+		jw_hex(w,hk,p,n);
+	}
+} // }}}
+
+static void json_bootp(struct jw *w,const uint8_t *d,int len) { // {{{ BOOTP header and options (caller ensures len>=DHCP_FIXED)
+	int i,n,hl,overload=find_overload(d,len);
+	char b[64];
+
+	jw_uint(w,"op",d[0]);
+	if (d[0]<strcountof(operands))
+		jw_str(w,"op_text",operands[d[0]]);
+	jw_uint(w,"htype",d[1]);
+	if (d[1]<strcountof(htypes))
+		jw_str(w,"htype_text",htypes[d[1]]);
+	jw_uint(w,"hlen",d[2]);
+	jw_uint(w,"hops",d[3]);
+	snprintf(b,sizeof b,"%02x%02x%02x%02x",d[4],d[5],d[6],d[7]);
+	jw_str(w,"xid",b);
+	jw_uint(w,"secs",be16(d+8));
+	jw_uint(w,"flags",be16(d+10));
+	jw_ip(w,"ciaddr",d+12);
+	jw_ip(w,"yiaddr",d+16);
+	jw_ip(w,"siaddr",d+20);
+	jw_ip(w,"giaddr",d+24);
+	hl=d[2]==0||d[2]>16?16:d[2]; // hlen bytes of the 16 byte field are the address
+	for (i=0,n=0;i<hl;i++)
+		n+=snprintf(b+n,sizeof b-n,"%s%02x",i?":":"",d[28+i]);
+	jw_str(w,"chaddr",b);
+	json_name_field(w,"sname",d+44,64,overload&2);
+	json_name_field(w,"file",d+108,128,overload&1);
+	if (len<DHCP_FIXED+4||memcmp(d+DHCP_FIXED,dhcp_cookie,4)) { // plain BOOTP: vendor data, not options
+		jw_hex(w,"vendor_hex",d+DHCP_FIXED,len-DHCP_FIXED);
+		return;
+	}
+	jw_arr(w,"options");
+	json_option_area(w,d+DHCP_FIXED+4,len-DHCP_FIXED-4,NULL);
+	if (overload&1) // the file field's options, then sname's, in RFC 3396 order
+		json_option_area(w,d+108,128,"file");
+	if (overload&2)
+		json_option_area(w,d+44,64,"sname");
+	jw_end(w);
+} // }}}
+
+static void json_time(struct jw *w,const struct timeval *ts) { // {{{ ts as epoch seconds, time as local ISO 8601 with offset (null when the instant is not a representable date)
+	long usec=(long)ts->tv_usec;
+	time_t t=ts->tv_sec;
+	struct tm tm;
+	char b[64],z[8];
+
+	if (usec<0||usec>999999)
+		usec=0;
+	jw_num(w,"ts",(long long)ts->tv_sec,(unsigned long)usec,6);
+	if (localtime_r(&t,&tm)&&strftime(b,sizeof b,"%Y-%m-%dT%H:%M:%S",&tm)&&strftime(z,sizeof z,"%z",&tm)==5) {
+		snprintf(b+strlen(b),sizeof b-strlen(b),".%03ld%.3s:%s",usec/1000,z,z+3);
+		jw_str(w,"time",b);
+	} else
+		jw_null(w,"time");
+} // }}}
+
+void dhcp_json_print(FILE *out,const struct dhcp_frame *f,const struct timeval *ts,const uint8_t *frame,int framelen) { // {{{ one packet as a single JSON line (the -j output)
+	uint8_t ip[4];
+	char b[24];
+	struct jw w;
+	int i;
+
+	if (f->plen==0) // UDP with no payload at all: nothing to show, as in the text output
+		return;
+
+	jw_init(&w,out);
+	jw_obj(&w,NULL);
+	jw_uint(&w,"schema",1);
+	json_time(&w,ts);
+	if (f->nvlan) {
+		jw_arr(&w,"vlan");
+		for (i=0;i<f->nvlan;i++) {
+			b[0]=f->vlan[i].type;
+			b[1]=0;
+			jw_obj(&w,NULL);
+			jw_str(&w,"type",b);
+			jw_uint(&w,"id",f->vlan[i].id);
+			jw_end(&w);
+		}
+		jw_end(&w);
+	}
+	jw_obj(&w,"src");
+	memcpy(ip,&f->srcip,4);
+	jw_ip(&w,"ip",ip);
+	snprintf(b,sizeof b,"%02x:%02x:%02x:%02x:%02x:%02x",f->smac[0],f->smac[1],f->smac[2],f->smac[3],f->smac[4],f->smac[5]);
+	jw_str(&w,"mac",b);
+	jw_end(&w);
+	jw_obj(&w,"dst");
+	memcpy(ip,&f->dstip,4);
+	jw_ip(&w,"ip",ip);
+	snprintf(b,sizeof b,"%02x:%02x:%02x:%02x:%02x:%02x",f->dmac[0],f->dmac[1],f->dmac[2],f->dmac[3],f->dmac[4],f->dmac[5]);
+	jw_str(&w,"mac",b);
+	jw_end(&w);
+	jw_uint(&w,"len",(unsigned long)f->plen);
+	if (f->plen<DHCP_FIXED) // too short for the fixed BOOTP header
+		jw_true(&w,"truncated");
+	else
+		json_bootp(&w,f->payload,f->plen);
+	if (frame)
+		jw_hex(&w,"frame_hex",frame,framelen>0?(size_t)framelen:0);
+	jw_end(&w);
+	fputc('\n',out);
+	fflush(out);
+} // }}}
+
+// }}}

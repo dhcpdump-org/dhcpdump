@@ -4,9 +4,9 @@ B<dhcpdump> - DHCP packet dumper
 
 =head1 SYNOPSIS
 
-B<dhcpdump> [B<-h> I<regular-expression>] [B<-H>] [B<-t>] [B<-Z> I<user>] B<-i> I<interface>
+B<dhcpdump> [B<-h> I<regular-expression>] [B<-H>] [B<-j> | B<-t>] [B<-Z> I<user>] B<-i> I<interface>
 
-B<dhcpdump> [B<-h> I<regular-expression>] [B<-H>] [B<-t>] [B<-Z> I<user>] B<-r> I<pcapfile>
+B<dhcpdump> [B<-h> I<regular-expression>] [B<-H>] [B<-j> | B<-t>] [B<-Z> I<user>] B<-r> I<pcapfile>
 
 =head1 DESCRIPTION
 
@@ -31,6 +31,9 @@ ten C<:00> pairs; anchored expressions need to account for that (C<^00:c0:4f>
 matches, C<4f:82:ac:7f$> does not).
 
 Option B<-H> will additionally show full packet hex dump.
+
+Option B<-j> prints every packet as one line of JSON instead, for scripts and
+log pipelines; see L</JSON OUTPUT>.
 
 Instead of getting live data from an interface, a pcap dump file can be
 used:
@@ -159,6 +162,47 @@ At the option field, the first field is the value of the option,
 the second one (between brackets) is the length of the option-datafield,
 the third field is the name of the option, the fourth field is the
 data of the option.
+
+=head1 JSON OUTPUT
+
+With B<-j> each DHCP packet is written as one JSON object on a line of its
+own (JSON Lines), flushed as it is written, so the output can be piped into
+tools such as B<jq>(1). For example, to print every NAK:
+
+  dhcpdump -i eth0 -j | jq -c 'select(any(.options[]?; .code == 53 and .value == 6))'
+
+Diagnostics stay on stderr, so stdout carries only JSON. With B<-H> the frame
+is added as a B<frame_hex> field instead of being printed. B<-j> cannot be
+combined with B<-t>.
+
+Each packet object has B<schema> (1, changed only for an incompatible
+change), B<ts> (capture time in epoch seconds with a microsecond fraction),
+B<time> (the same instant as local ISO 8601 time with UTC offset, or null if
+it cannot be represented as a date), B<vlan> (only when tagged: a list of
+objects with B<type> C or S and B<id>, outer tag first), B<src> and B<dst>
+(objects with B<ip> and B<mac>) and B<len> (the payload length).
+
+A payload shorter than the 236 byte BOOTP header only adds B<truncated>
+(true). Otherwise these follow: B<op>, B<htype>, B<hlen>, B<hops>, B<secs> and
+B<flags> as numbers; B<op_text> and B<htype_text> for known values; B<xid> as
+8 hex digits; B<ciaddr>, B<yiaddr>, B<siaddr> and B<giaddr> as dotted quads;
+B<chaddr>, the first B<hlen> bytes in colon hex; B<sname> and B<file>, as
+text when printable, as B<sname_hex> and B<file_hex> otherwise, and null when
+they carry overloaded options; and B<options>. Plain BOOTP without the magic
+cookie has B<vendor_hex> instead of B<options>.
+
+B<options> lists the options in packet order, leaving out pad and end. Each
+is an object with B<code>, B<name> and B<len>, plus its value: either
+B<value>, typed by the option (an address, a list of addresses, a number, a
+list, or an object for structured options such as 81, 82 and 121), with
+B<text> naming an enumerated value; or B<hex> for raw bytes. A value that
+does not fit its option's structure carries B<malformed> (the reason) and
+B<hex> instead. Options without a structured type give B<value> when every
+byte is printable ASCII, B<hex> otherwise, and neither when empty. Options
+taken from an overloaded field add B<source>, set to file or sname.
+
+Strings only ever hold printable ASCII and everything else is given as hex,
+so the output is valid JSON whatever a packet contains.
 
 =head1 RETURN VALUES
 

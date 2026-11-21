@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <sys/time.h>
 
 // }}}
 
@@ -59,6 +60,11 @@ void dhcp_fprint_payload(FILE *out,const uint8_t *data,int data_len,const char *
 
 // Full-frame hex dump (the -H output) to stdout.
 void dhcp_hexdump(const uint8_t *buf,int len);
+
+// One JSON object on a single, newline terminated line for a decapsulated
+// frame (the -j output); ts is its capture time. If frame is non-NULL, its
+// framelen bytes are added as "frame_hex". The schema is in dhcpdump.pod.
+void dhcp_json_print(FILE *out,const struct dhcp_frame *f,const struct timeval *ts,const uint8_t *frame,int framelen);
 
 // }}}
 

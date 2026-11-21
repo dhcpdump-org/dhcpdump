@@ -46,7 +46,7 @@ $$(error $(3) not found: install its development package (pkg-config module '$(1
 endif
 endef
 
-OBJS:=main.o dhcpdump.o
+OBJS:=main.o dhcpdump.o json.o
 $(eval $(call check_dep,libpcap,-lpcap,libpcap))
 
 ifdef NO_TUI
@@ -64,7 +64,7 @@ endif
 all: dhcpdump dhcpdump.8
 
 clean:
-	-rm -f main.o dhcpdump.o dhcp.o session.o tui.o dhcpdump dhcpdump.8
+	-rm -f main.o dhcpdump.o json.o dhcp.o session.o tui.o dhcpdump dhcpdump.8
 
 re:
 	${MAKE} clean
@@ -91,8 +91,11 @@ dhcpdump: ${OBJS} Makefile
 main.o: main.c dhcpdump.h tui.h session.h version.h Makefile
 	${CC} ${CFLAGS} -c -o $@ main.c
 
-dhcpdump.o: dhcpdump.c dhcpdump.h dhcp_options.h version.h Makefile
+dhcpdump.o: dhcpdump.c dhcpdump.h dhcp_options.h json.h version.h Makefile
 	${CC} ${CFLAGS} -c -o $@ dhcpdump.c
+
+json.o: json.c json.h Makefile
+	${CC} ${CFLAGS} -c -o $@ json.c
 
 dhcp.o: dhcp.c dhcp.h dhcpdump.h Makefile
 	${CC} ${CFLAGS} -c -o $@ dhcp.c
