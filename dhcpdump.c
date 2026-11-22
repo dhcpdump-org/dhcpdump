@@ -87,11 +87,11 @@ static inline void print16bits(const uint8_t *data) { // {{{ prints a value of 1
 	fprintf(g_out,"%u",(unsigned)((data[0]<<8)|data[1]));
 } // }}}
 
-static inline void printTimeVal(unsigned t) { // {{{ print a seconds count raw, followed by its w/d/h/m/s breakdown
-	unsigned rest=t;
+static inline void printTimeVal(long long t) { // {{{ print a seconds count raw, followed by its w/d/h/m/s breakdown; a negative count gets a minus in front of both
+	unsigned rest=t<0?0u-(unsigned)t:(unsigned)t; // the magnitude; callers pass 32 bit values
 	int any=0;
 
-	fprintf(g_out,"%u (",t);
+	fprintf(g_out,"%lld (%s",t,t<0?"-":"");
 	if (rest>=SPERW) { // >=, so exactly one week reads 1w and not 7d
 		fprintf(g_out,"%uw",rest/(SPERW));
 		rest%=SPERW;
@@ -124,6 +124,12 @@ static inline void printTime8(const uint8_t *data) { // {{{ print the data as a 
 static inline void printTime32(const uint8_t *data) { // {{{ print the data as a 32bits time-value
 	// cast before shifting; data[0]<<24 on its own promotes to int and overflows
 	printTimeVal(((uint32_t)data[0]<<24)|((uint32_t)data[1]<<16)|((uint32_t)data[2]<<8)|data[3]);
+} // }}}
+
+static inline void printTimeOffset32(const uint8_t *data) { // {{{ print the data as a signed 32bits time-value (RFC 2132 3.4: seconds east of UTC, negative west of it)
+	uint32_t t=((uint32_t)data[0]<<24)|((uint32_t)data[1]<<16)|((uint32_t)data[2]<<8)|data[3];
+
+	printTimeVal(t&0x80000000u?(long long)t-0x100000000LL:(long long)t); // two's complement by hand; a cast to int32_t is implementation defined before C23
 } // }}}
 
 static void print_hex_row(const uint8_t *data,int n) { // {{{ one hexdump line without its address column: 16 byte positions as spaced hex in two groups, then the ascii in bars, both space padded so the bars always line up
@@ -510,6 +516,12 @@ static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode 
 				break;
 
 			case 2: // Time offset
+				if (data[j+1]<4)
+					fprintf(g_out,"*malformed - too short*");
+				else
+					printTimeOffset32(data+j+2);
+				break;
+
 			case 24: // Path MTU aging timeout
 			case 35: // ARP cache timeout
 			case 38: // TCP keepalive interval
