@@ -117,10 +117,6 @@ static inline void printTimeVal(unsigned t) { // {{{ print a seconds count raw, 
 	fprintf(g_out,")");
 } // }}}
 
-static inline void printTime8(const uint8_t *data) { // {{{ print the data as a 8bits time-value
-	printTimeVal(data[0]);
-} // }}}
-
 static inline void printTime32(const uint8_t *data) { // {{{ print the data as a 32bits time-value
 	// cast before shifting; data[0]<<24 on its own promotes to int and overflows
 	printTimeVal(((uint32_t)data[0]<<24)|((uint32_t)data[1]<<16)|((uint32_t)data[2]<<8)|data[3]);
@@ -488,12 +484,6 @@ static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode 
 				break;
 
 			case 23: // Default IP TTL
-				if (data[j+1]<1)
-					fprintf(g_out,"*malformed - too short*");
-				else
-					printTime8(data+j+2);
-				break;
-
 			case 37: // TCP default TTL
 			case 145: // FORCERENEW_NONCE_CAPABLE
 				if (data[j+1]<1)
