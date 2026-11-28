@@ -131,6 +131,7 @@ static int tui_keep(const uint8_t *data,int data_len) { // {{{ TUI ingest filter
 
 static void pcap_callback(uint8_t *user __attribute__((unused)),const struct pcap_pkthdr *h,const uint8_t *sp) { // {{{ classic per-packet line dump
 	struct dhcp_frame f;
+	struct timeval ts=h->ts;
 	char timestamp[40];
 
 	if (dohexdump) {
@@ -146,14 +147,16 @@ static void pcap_callback(uint8_t *user __attribute__((unused)),const struct pca
 
 	// the capture time, not the wall clock: a replayed file (-r) shows when
 	// its packets actually happened, and live captures stamp the same way
-	strftime(timestamp,sizeof timestamp,"%Y-%m-%d %H:%M:%S.",localtime(&h->ts.tv_sec));
-	snprintf(timestamp+strlen(timestamp),sizeof timestamp-strlen(timestamp),"%03ld",(long)h->ts.tv_usec/1000);
+	ts_normalize(&ts);
+	strftime(timestamp,sizeof timestamp,"%Y-%m-%d %H:%M:%S.",localtime(&ts.tv_sec));
+	snprintf(timestamp+strlen(timestamp),sizeof timestamp-strlen(timestamp),"%03ld",(long)ts.tv_usec/1000);
 
 	dhcp_print(&f,timestamp);
 } // }}}
 
 static void pcap_callback_json(uint8_t *user __attribute__((unused)),const struct pcap_pkthdr *h,const uint8_t *sp) { // {{{ -j: one JSON line per DHCP packet; with -H the frame rides along as a field so stdout stays pure JSON
 	struct dhcp_frame f;
+	struct timeval ts=h->ts;
 
 	if (!dhcp_decap(sp,h->caplen,&f,stderr))
 		return;
@@ -161,7 +164,8 @@ static void pcap_callback_json(uint8_t *user __attribute__((unused)),const struc
 	if (hmask&&check_ch(f.payload,f.plen))
 		return;
 
-	dhcp_json_print(stdout,&f,&h->ts,dohexdump?sp:NULL,(int)h->caplen);
+	ts_normalize(&ts);
+	dhcp_json_print(stdout,&f,&ts,dohexdump?sp:NULL,(int)h->caplen);
 } // }}}
 
 int main(int argc,char **argv) { // {{{

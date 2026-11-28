@@ -27,7 +27,7 @@ static void jw_quote(FILE *f,const uint8_t *s,size_t n) { // {{{ a JSON string; 
 } // }}}
 
 static void jw_member(struct jw *w,const char *key) { // {{{ separator from the previous sibling, then the key when inside an object
-	if (w->depth>0&&w->n[w->depth-1]++)
+	if (w->depth>0&&w->depth<=JW_MAXDEPTH&&w->n[w->depth-1]++) // past JW_MAXDEPTH there is no counter to keep; the writer never nests that deep
 		fputc(',',w->f);
 	if (key) {
 		jw_quote(w->f,(const uint8_t *)key,strlen(key));

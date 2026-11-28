@@ -61,6 +61,10 @@ void dhcp_fprint_payload(FILE *out,const uint8_t *data,int data_len,const char *
 // Full-frame hex dump (the -H output) to stdout.
 void dhcp_hexdump(const uint8_t *buf,int len);
 
+// Fold an out of range microsecond count (a crafted pcap record can carry
+// one) into the seconds, so every output shows the same instant.
+void ts_normalize(struct timeval *tv);
+
 // One JSON object on a single, newline terminated line for a decapsulated
 // frame (the -j output); ts is its capture time. If frame is non-NULL, its
 // framelen bytes are added as "frame_hex". The schema is in dhcpdump.pod.

@@ -175,7 +175,10 @@ tools such as B<jq>(1). For example, to print every NAK:
   dhcpdump -i eth0 -j | jq -c 'select(any(.options[]?; .code == 53 and .value == 6))'
 
 Diagnostics stay on stderr, so stdout carries only JSON. With B<-H> the frame
-is added as a B<frame_hex> field instead of being printed. B<-j> cannot be
+is added to its packet's object as a B<frame_hex> field instead of being
+printed; unlike the text output, which dumps every captured frame, this only
+covers the frames that are written as a packet object, so not ones that are
+not DHCP, are filtered out by B<-h> or carry an empty payload. B<-j> cannot be
 combined with B<-t>.
 
 Each packet object has B<schema> (1, changed only for an incompatible
@@ -189,20 +192,67 @@ A payload shorter than the 236 byte BOOTP header only adds B<truncated>
 (true). Otherwise these follow: B<op>, B<htype>, B<hlen>, B<hops>, B<secs> and
 B<flags> as numbers; B<op_text> and B<htype_text> for known values; B<xid> as
 8 hex digits; B<ciaddr>, B<yiaddr>, B<siaddr> and B<giaddr> as dotted quads;
-B<chaddr>, the first B<hlen> bytes in colon hex; B<sname> and B<file>, as
+B<chaddr> in colon hex, the first B<hlen> bytes of the field, or all 16 when
+B<hlen> is 0 or larger than 16; B<sname> and B<file>, as
 text when printable, as B<sname_hex> and B<file_hex> otherwise, and null when
 they carry overloaded options; and B<options>. Plain BOOTP without the magic
 cookie has B<vendor_hex> instead of B<options>.
 
 B<options> lists the options in packet order, leaving out pad and end. Each
-is an object with B<code>, B<name> and B<len>, plus its value: either
-B<value>, typed by the option (an address, a list of addresses, a number, a
-list, or an object for structured options such as 81, 82 and 121), with
-B<text> naming an enumerated value; or B<hex> for raw bytes. A value that
-does not fit its option's structure carries B<malformed> (the reason) and
-B<hex> instead. Options without a structured type give B<value> when every
-byte is printable ASCII, B<hex> otherwise, and neither when empty. Options
-taken from an overloaded field add B<source>, set to file or sname.
+is an object with B<code>, B<name> and B<len>, plus its value, either as
+B<value> or, for raw bytes, as B<hex>. A value that does not fit its option's
+structure carries B<malformed> (the reason) and B<hex> instead. An option cut
+off by the end of the packet has B<malformed> set to truncated and B<hex>
+holding what is left of it, and no B<len> when even its length byte is
+missing. Options taken from an overloaded field add B<source>, set to file or
+sname. By option, B<value> is:
+
+=over 4
+
+=item a dotted quad string
+
+1, 16, 28, 32, 50, 54, 118.
+
+=item a list of dotted quad strings
+
+3-11, 41, 42, 44, 45, 48, 49, 65, 68-76, 85, 92, 148, 150.
+
+=item a number
+
+13, 22, 23, 26, 37, 57, 145 (8 and 16 bit values); 24, 35, 38, 51, 58, 59,
+91, 108, 153, 211 (durations in seconds); 152, 154, 155 (absolute times in
+epoch seconds); 2 (time offset in seconds, negative west of UTC).
+
+=item a number with a name
+
+19, 20, 27, 29-31, 34, 36, 39, 46, 52, 53, 116: B<value> is the number and
+B<text> its name, left out when the value has no name.
+
+=item a list of numbers
+
+25.
+
+=item an object
+
+78: B<mandatory> (the flag byte) and B<addrs> (a list of dotted quads);
+81: B<flags>, B<rcode1>, B<rcode2> and B<name> (B<name_hex> when not
+printable, left out when absent); 94: B<type>, B<major> and B<minor>.
+
+=item a list of objects
+
+21: B<addr> and B<mask>; 33: B<dest> and B<router>; 121, 249: B<dest> (in
+address/prefix length form) and B<via>; 55: B<code> and B<name> of each
+requested option; 93: B<value> and B<text> (when known) of each architecture;
+82: one per sub-option with B<code>, B<name> (when known), B<len> and
+B<value> or B<hex>, or B<malformed> when the sub-option does not fit (no
+B<len> when only its code is left, B<hex> with what is left when it is too
+large).
+
+=back
+
+63 is always given as B<hex>. All the other options have no structured type:
+B<value> when every byte is printable ASCII, B<hex> otherwise, and neither
+when empty.
 
 Strings only ever hold printable ASCII and everything else is given as hex,
 so the output is valid JSON whatever a packet contains.

@@ -402,12 +402,14 @@ enum opt_type {
 	OT_TEXT=0, // printable text, hex otherwise
 	OT_ADDR, // one IPv4 address
 	OT_ADDRS, // list of IPv4 addresses
+	OT_SLPDA, // SLP directory agent (RFC 2610): mandatory byte, then IPv4 addresses
 	OT_ADDRMASKS, // list of address/mask pairs
 	OT_ROUTES, // list of destination/router pairs
 	OT_U8, // 8 bit number
 	OT_U16, // 16 bit number
 	OT_U16S, // list of 16 bit numbers
 	OT_SECS, // 32 bit count of seconds
+	OT_EPOCH, // 32 bit absolute time, seconds since 1970-01-01 UTC
 	OT_TIMEOFFSET, // 32 bit seconds, signed (RFC 2132 3.4)
 	OT_ENUM, // 8 bit value with names
 	OT_HEX, // raw bytes
@@ -490,7 +492,7 @@ static const struct opt_info opt_info[256] = {
 [ 74] = OPT(OT_ADDRS), // IRC server
 [ 75] = OPT(OT_ADDRS), // StreetTalk server
 [ 76] = OPT(OT_ADDRS), // StreetTalk directory assistance server
-[ 78] = OPT(OT_ADDRS), // Directory agent
+[ 78] = OPT(OT_SLPDA), // Directory agent
 [ 81] = OPT(OT_FQDN), // Client FQDN
 [ 82] = OPT(OT_RELAY), // Relay agent information
 [ 85] = OPT(OT_ADDRS), // NDS server
@@ -505,11 +507,11 @@ static const struct opt_info opt_info[256] = {
 [145] = OPT(OT_U8), // FORCERENEW_NONCE_CAPABLE
 [148] = OPT(OT_ADDRS), // DOTS address
 [150] = OPT(OT_ADDRS), // TFTP server address
-[152] = OPT(OT_SECS), // base-time
+[152] = OPT(OT_EPOCH), // base-time
 [153] = OPT(OT_SECS), // start-time-of-state
-[154] = OPT(OT_SECS), // query-start-time
-[155] = OPT(OT_SECS), // query-end-time
-[162] = OPT(OT_ADDRS), // Encrypted DNS server
+[154] = OPT(OT_EPOCH), // query-start-time
+[155] = OPT(OT_EPOCH), // query-end-time
+// 162 Encrypted DNS server (RFC 9463) is a series of structured instances, not an address list: left untyped, so shown raw
 [211] = OPT(OT_SECS), // reboot-time
 [249] = OPT(OT_CROUTES), // MSFT classless route
 };

@@ -119,15 +119,33 @@ static inline void printTimeVal(long long t) { // {{{ print a seconds count raw,
 	fprintf(g_out,")");
 } // }}}
 
+static inline uint32_t be32(const uint8_t *p) { // {{{ read 4 network order bytes into a host order value
+	// cast before shifting; p[0]<<24 on its own promotes to int and overflows
+	return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
+} // }}}
+
+static inline long be32s(const uint8_t *p) { // {{{ read 4 network order bytes as a signed two's complement value
+	uint32_t t=be32(p);
+
+	return t&0x80000000u?-(long)(~t)-1:(long)t; // by hand; a cast to int32_t is implementation defined before C23
+} // }}}
+
 static inline void printTime32(const uint8_t *data) { // {{{ print the data as a 32bits time-value
-	// cast before shifting; data[0]<<24 on its own promotes to int and overflows
-	printTimeVal(((uint32_t)data[0]<<24)|((uint32_t)data[1]<<16)|((uint32_t)data[2]<<8)|data[3]);
+	printTimeVal(be32(data));
 } // }}}
 
 static inline void printTimeOffset32(const uint8_t *data) { // {{{ print the data as a signed 32bits time-value (RFC 2132 3.4: seconds east of UTC, negative west of it)
-	uint32_t t=((uint32_t)data[0]<<24)|((uint32_t)data[1]<<16)|((uint32_t)data[2]<<8)|data[3];
+	printTimeVal(be32s(data));
+} // }}}
 
-	printTimeVal(t&0x80000000u?(long long)t-0x100000000LL:(long long)t); // two's complement by hand; a cast to int32_t is implementation defined before C23
+static inline void printEpoch32(const uint8_t *data) { // {{{ print the data as a 32bits absolute time (seconds since the epoch), followed by it as local time
+	time_t t=be32(data);
+	struct tm tm;
+	char b[32];
+
+	fprintf(g_out,"%lu",(unsigned long)be32(data));
+	if (localtime_r(&t,&tm)&&strftime(b,sizeof b,"%Y-%m-%d %H:%M:%S",&tm))
+		fprintf(g_out," (%s)",b);
 } // }}}
 
 static void print_hex_row(const uint8_t *data,int n) { // {{{ one hexdump line without its address column: 16 byte positions as spaced hex in two groups, then the ascii in bars, both space padded so the bars always line up
@@ -265,6 +283,7 @@ static const char *opt_malformed(int type,const uint8_t *v,int len) { // {{{ why
 	switch (type) {
 		case OT_ADDR:
 		case OT_SECS:
+		case OT_EPOCH:
 		case OT_TIMEOFFSET:
 			return len<4?"too short":NULL;
 		case OT_U16:
@@ -278,6 +297,8 @@ static const char *opt_malformed(int type,const uint8_t *v,int len) { // {{{ why
 			return len<3?"too short":NULL;
 		case OT_ADDRS:
 			return len<4?"too short":len%4?"length not a multiple of 4":NULL;
+		case OT_SLPDA:
+			return len<1?"too short":(len-1)%4?"addresses not a multiple of 4":NULL;
 		case OT_ADDRMASKS:
 		case OT_ROUTES:
 			return len<8?"too short":len%8?"length not a multiple of 8":NULL;
@@ -359,6 +380,19 @@ static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode 
 					printList(v,len,4,' ');
 				break;
 
+			case OT_SLPDA:
+				if (why) {
+					fprintf(g_out,"*malformed*");
+					printHexBlock(v,len);
+					break;
+				}
+				fprintf(g_out,"%u (%s)",v[0],v[0]?"mandatory":"optional");
+				if (len>1) {
+					fprintf(g_out,"\n%*s",OPTVALCOL,"");
+					printList(v+1,len-1,4,' ');
+				}
+				break;
+
 			case OT_ADDRMASKS:
 			case OT_ROUTES:
 				if (why) {
@@ -402,6 +436,13 @@ static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode 
 					fprintf(g_out,"*malformed - too short*");
 				else
 					printTime32(v);
+				break;
+
+			case OT_EPOCH:
+				if (why)
+					fprintf(g_out,"*malformed - too short*");
+				else
+					printEpoch32(v);
 				break;
 
 			case OT_ENUM:
@@ -787,10 +828,6 @@ void dhcp_fprint_payload(FILE *out,const uint8_t *data,int data_len,const char *
 
 // {{{ JSON output (-j)
 
-static inline uint32_t be32(const uint8_t *p) { // {{{ read 4 network order bytes into a host order value
-	return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
-} // }}}
-
 static void json_value(struct jw *w,int code,const uint8_t *v,int len) { // {{{ the value of one option, typed by opt_info; malformed exactly when the text output says so
 	const struct opt_info *oi=&opt_info[code];
 	const char *why=opt_malformed(oi->type,v,len);
@@ -817,6 +854,15 @@ static void json_value(struct jw *w,int code,const uint8_t *v,int len) { // {{{ 
 				jw_ip(w,NULL,v+i);
 			jw_end(w);
 			break;
+		case OT_SLPDA:
+			jw_obj(w,"value");
+			jw_uint(w,"mandatory",v[0]);
+			jw_arr(w,"addrs");
+			for (i=1;i+4<=len;i+=4)
+				jw_ip(w,NULL,v+i);
+			jw_end(w);
+			jw_end(w);
+			break;
 		case OT_ADDRMASKS:
 		case OT_ROUTES:
 			jw_arr(w,"value");
@@ -841,10 +887,11 @@ static void json_value(struct jw *w,int code,const uint8_t *v,int len) { // {{{ 
 			jw_end(w);
 			break;
 		case OT_SECS:
+		case OT_EPOCH:
 			jw_uint(w,"value",be32(v));
 			break;
 		case OT_TIMEOFFSET:
-			jw_int(w,"value",(int32_t)be32(v));
+			jw_int(w,"value",be32s(v));
 			break;
 		case OT_ENUM:
 			jw_uint(w,"value",v[0]);
@@ -885,8 +932,7 @@ static void json_value(struct jw *w,int code,const uint8_t *v,int len) { // {{{ 
 				if (v[i]<strcountof(relayagent_suboptions))
 					jw_str(w,"name",relayagent_suboptions[v[i]]);
 				if (i+2>len) { // sub-option code and length must both be present
-					jw_str(w,"malformed","truncated");
-					jw_hex(w,"hex",v+i+1,len-i-1);
+					jw_str(w,"malformed","truncated"); // only the code byte is left, already shown as code
 					jw_end(w);
 					break;
 				}
@@ -1031,14 +1077,27 @@ static void json_bootp(struct jw *w,const uint8_t *d,int len) { // {{{ BOOTP hea
 	jw_end(w);
 } // }}}
 
-static void json_time(struct jw *w,const struct timeval *ts) { // {{{ ts as epoch seconds, time as local ISO 8601 with offset (null when the instant is not a representable date)
+void ts_normalize(struct timeval *tv) { // {{{
+	long q,r;
+
+	if (tv->tv_usec>=0&&tv->tv_usec<=999999)
+		return;
+	q=(long)tv->tv_usec/1000000;
+	r=(long)tv->tv_usec%1000000;
+	if (r<0) { // division truncates toward zero; borrow a second so the microseconds end up in range
+		r+=1000000;
+		q--;
+	}
+	tv->tv_sec+=q;
+	tv->tv_usec=r;
+} // }}}
+
+static void json_time(struct jw *w,const struct timeval *ts) { // {{{ ts as epoch seconds, time as local ISO 8601 with offset (null when the instant is not a representable date); ts is normalized
 	long usec=(long)ts->tv_usec;
 	time_t t=ts->tv_sec;
 	struct tm tm;
 	char b[64],z[8];
 
-	if (usec<0||usec>999999)
-		usec=0;
 	jw_num(w,"ts",(long long)ts->tv_sec,(unsigned long)usec,6);
 	if (localtime_r(&t,&tm)&&strftime(b,sizeof b,"%Y-%m-%dT%H:%M:%S",&tm)&&strftime(z,sizeof z,"%z",&tm)==5) {
 		snprintf(b+strlen(b),sizeof b-strlen(b),".%03ld%.3s:%s",usec/1000,z,z+3);

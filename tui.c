@@ -145,6 +145,7 @@ static void tui_ingest(u_char *user,const struct pcap_pkthdr *h,const u_char *sp
 	if (!dhcp_parse(f.payload,f.plen,&msg))
 		return;
 	msg.ts=h->ts; // use the capture time, not wall clock
+	ts_normalize(&msg.ts);
 	msg.raw=f.payload; // kept as a copy by the model for the full packet view
 	msg.rawlen=f.plen;
 	msg.srcip=ntohl(f.srcip);
