@@ -34,7 +34,11 @@
 // expression, and that shift leaks rightward across "or"; a flat list of
 // alternatives therefore mis-decodes. The deeper level must be *nested* inside
 // the previous "vlan" group so each shift stays scoped to its own subexpression.
-#define DHCPFILTER "ip and udp and (src port bootpc or bootps) and (dst port bootpc or bootps)"
+// Ports are numeric, names need /etc/services, absent in minimal systems such
+// as build chroots:
+// bootpc=68
+// bootps=67
+#define DHCPFILTER "ip and udp and (src port 68 or 67) and (dst port 68 or 67)"
 #define CAPFILTER "(" DHCPFILTER ") or (vlan and ((" DHCPFILTER ") or (vlan and (" DHCPFILTER "))))"
 
 #ifdef NO_TUI // built without the -t TUI (see NO_TUI in the Makefile)
