@@ -85,7 +85,7 @@ scan:
 
 dhcpdump.8: dhcpdump.pod Makefile
 	pod2man --section 8 \
-		--date "29 July 2026" \
+		--date "28 November 2026" \
 		--name "DHCPDUMP" \
 		--center "User Contributed Software" \
 		dhcpdump.pod dhcpdump.8

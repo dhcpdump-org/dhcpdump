@@ -3,7 +3,7 @@ Parse DHCP packets from a network interface
 
 This fork of `dhcpdump` 1.8 by Edwin Groothuis, edwin@mavetju.org (http://www.mavetju.org) collects in a single place bug-fixes and improvements collected over the last 10+ years.
 
-## Unreleased
+## Version 2.01
 
 * Add JSON output (`-j`): one object per DHCP packet per line; with `-H` it also carries the raw frame and every option's raw bytes as hex ([Don Steele](https://github.com/donaldsteele))
 * Drive option decoding from a per-code type table ([Don Steele](https://github.com/donaldsteele))
@@ -11,6 +11,7 @@ This fork of `dhcpdump` 1.8 by Edwin Groothuis, edwin@mavetju.org (http://www.ma
 * Print option 2 (Time offset) as a signed value and option 23 (Default IP TTL) as a number ([Don Steele](https://github.com/donaldsteele))
 * Decode option 78 (SLP directory agent, RFC 2610) and option 162 (encrypted DNS, RFC 9463)
 * Print options 152, 154 and 155 (RFC 6926) as absolute times
+* Decide what is printable as plain ASCII, whatever the locale
 * Add regression tests (`make test`)
 
 ### JSON output
