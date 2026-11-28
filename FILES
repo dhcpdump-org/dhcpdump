@@ -3,13 +3,31 @@ General
 FILES           - This file
 README.md       - Current information about the project
 LICENSE         - License under which this software is distributed
+SECURITY.md     - How to report security issues
 old_CHANGES     - Old change log
 old_CONTACT     - Original author contact information
 
 Source-files
 ------------
-dhcp_options.h  - Tables with dhcp-packet-field values and their readable descriptions
+main.c          - Command line handling, capture setup and the per-packet callbacks
+dhcpdump.c      - Frame decapsulation, the text and JSON packet decoders
+dhcpdump.h      - Interface of dhcpdump.c
+dhcp_options.h  - Tables with dhcp-packet-field values, their readable descriptions and value types
+json.c          - Small streaming JSON writer used by -j
+json.h          - Interface of json.c
+dhcp.c          - DHCP message parser used by the session tracker
+dhcp.h          - Interface of dhcp.c
+session.c       - Session and transaction tracking for the TUI
+session.h       - Interface of session.c
+tui.c           - The interactive TUI (-t)
+tui.h           - Interface of tui.c
 version.h       - Current program version
-dhcpdump.c      - The source-file
-dhcpdump.pod    - The original man-file
+dhcpdump.pod    - The man page source
 Makefile        - Simple build system
+
+Tests
+-----
+tests/run.sh    - Regression test driver (make test)
+tests/mkpcap.c  - Generator of the test captures
+tests/jsoncheck.c - Strict checker of the -j output
+tests/expected/ - Expected output of the decoders

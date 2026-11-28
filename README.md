@@ -3,13 +3,42 @@ Parse DHCP packets from a network interface
 
 This fork of `dhcpdump` 1.8 by Edwin Groothuis, edwin@mavetju.org (http://www.mavetju.org) collects in a single place bug-fixes and improvements collected over the last 10+ years.
 
-## Version 2.00pre1 (unreleased)
+## Unreleased
+
+* Add JSON output (`-j`): one object per DHCP packet per line; with `-H` it also carries the raw frame and every option's raw bytes as hex ([Don Steele](https://github.com/donaldsteele))
+* Drive option decoding from a per-code type table ([Don Steele](https://github.com/donaldsteele))
+* Clear capabilities when `-Z` drops privileges ([Don Steele](https://github.com/donaldsteele))
+* Print option 2 (Time offset) as a signed value and option 23 (Default IP TTL) as a number ([Don Steele](https://github.com/donaldsteele))
+* Decode option 78 (SLP directory agent, RFC 2610) and option 162 (encrypted DNS, RFC 9463)
+* Print options 152, 154 and 155 (RFC 6926) as absolute times
+* Add regression tests (`make test`)
+
+### JSON output
+
+Run with `-j` to get one JSON object per DHCP packet per line (JSON Lines),
+ready for `jq` or a log pipeline:
+
+    dhcpdump -i eth0 -j | jq -c 'select(any(.options[]?; .code == 53 and .value == 6))'
+
+Diagnostics stay on stderr. The schema is in the manual page.
+
+## Version 2.00
 
 * Add an interactive session-tracking TUI (`-t`)
 * The TUI depends on [yascreen](https://github.com/bbonev/yascreen)
 * Split packet parsing into a reusable decoder library separate from the CLI front end
 * Fix VLAN (802.1Q) and QinQ (802.1ad) tagged DHCP
 * The TUI is optional by `make NO_TUI=1`
+* Add `-Z <user>` to drop privileges once the capture is open
+* Distinguish plain BOOTP from DHCP and handle it better
+* Better decoding of option 93
+* Never print control characters from packet data, read all packet data as possibly unaligned and add more length checks
+* Capture whole frames (larger snaplen)
+* Send usage to stderr, exit non-zero on errors, fail early on a broken pcap file and exit when the interface disappears
+* TUI: `v`/`V` switch the view mode, Tab/Shift-Tab move between the panes, Ctrl-Z (and an external SIGTSTP) suspends, scrolling fixes
+* TUI: a RELEASE is not treated as a DECLINE, the packet store is bounded and robust against a non-monotonic clock
+* More consistent formatting and alignment of the output
+* Add `make scan` (clang static analyzer) and enable the extra warnings the compiler supports
 
 ### Session tracking
 
