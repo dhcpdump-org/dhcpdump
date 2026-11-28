@@ -176,7 +176,9 @@ tools such as B<jq>(1). For example, to print every NAK:
 
 Diagnostics stay on stderr, so stdout carries only JSON. With B<-H> the frame
 is added to its packet's object as a B<frame_hex> field instead of being
-printed; unlike the text output, which dumps every captured frame, this only
+printed, and every option and relay agent sub-option also carries its raw
+bytes as B<hex> next to its decoded B<value> (an over-long value keeps its
+extra bytes only there); unlike the text output, which dumps every captured frame, this only
 covers the frames that are written as a packet object, so not ones that are
 not DHCP, are filtered out by B<-h> or carry an empty payload. B<-j> cannot be
 combined with B<-t>.

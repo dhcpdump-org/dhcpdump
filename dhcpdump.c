@@ -828,6 +828,8 @@ void dhcp_fprint_payload(FILE *out,const uint8_t *data,int data_len,const char *
 
 // {{{ JSON output (-j)
 
+static int json_allhex; // -H: every option and relay sub-option also carries its raw bytes as hex
+
 static void json_value(struct jw *w,int code,const uint8_t *v,int len) { // {{{ the value of one option, typed by opt_info; malformed exactly when the text output says so
 	const struct opt_info *oi=&opt_info[code];
 	const char *why=opt_malformed(oi->type,v,len);
@@ -842,7 +844,7 @@ static void json_value(struct jw *w,int code,const uint8_t *v,int len) { // {{{ 
 		default: // OT_TEXT; a zero length option (e.g. rapid commit) has no value at all
 			if (len>0&&is_printable(v,len))
 				jw_strn(w,"value",v,len);
-			else if (len>0)
+			else if (len>0&&!json_allhex) // with -H the hex follows below anyway
 				jw_hex(w,"hex",v,len);
 			break;
 		case OT_ADDR:
@@ -899,7 +901,8 @@ static void json_value(struct jw *w,int code,const uint8_t *v,int len) { // {{{ 
 				jw_str(w,"text",oi->names[v[0]]);
 			break;
 		case OT_HEX:
-			jw_hex(w,"hex",v,len);
+			if (!json_allhex)
+				jw_hex(w,"hex",v,len);
 			break;
 		case OT_PRL:
 			jw_arr(w,"value");
@@ -945,7 +948,9 @@ static void json_value(struct jw *w,int code,const uint8_t *v,int len) { // {{{ 
 				}
 				if (v[i+1]>0&&is_printable(v+i+2,v[i+1]))
 					jw_strn(w,"value",v+i+2,v[i+1]);
-				else if (v[i+1]>0)
+				else if (v[i+1]>0&&!json_allhex)
+					jw_hex(w,"hex",v+i+2,v[i+1]);
+				if (json_allhex)
 					jw_hex(w,"hex",v+i+2,v[i+1]);
 				jw_end(w);
 				i+=v[i+1]+2;
@@ -990,6 +995,8 @@ static void json_value(struct jw *w,int code,const uint8_t *v,int len) { // {{{ 
 			jw_end(w);
 			break;
 	}
+	if (json_allhex) // the exact bytes behind the decoded value (an over-long value keeps its extra bytes only here)
+		jw_hex(w,"hex",v,len);
 } // }}}
 
 static void json_option_area(struct jw *w,const uint8_t *data,int data_len,const char *source) { // {{{ one TLV option area into the open options array, walked like print_option_area; pad and end are not listed
@@ -1115,6 +1122,7 @@ void dhcp_json_print(FILE *out,const struct dhcp_frame *f,const struct timeval *
 	if (f->plen==0) // UDP with no payload at all: nothing to show, as in the text output
 		return;
 
+	json_allhex=frame!=NULL;
 	jw_init(&w,out);
 	jw_obj(&w,NULL);
 	jw_uint(&w,"schema",1);
