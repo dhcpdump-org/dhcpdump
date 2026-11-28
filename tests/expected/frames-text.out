@@ -611,13 +611,90 @@ CHADDR: 00:c0:4f:82:ac:7f:00:00:00:00:00:00:00:00:00:00
  SNAME:
  FNAME:
 OPTION:  53 (  1) DHCP message type         5 (DHCPACK)
+OPTION: 162 ( 47) OPTION_V4_DNR
+                  instance 1
+                    priority                1
+                    adn                     dns.example
+                    addrs                   192.0.2.53
+                    mandatory               alpn,port
+                    alpn                    h2,h3
+                    port                    443
+OPTION: 162 ( 36) OPTION_V4_DNR
+                  *malformed - bad mandatory keys*
+          00 22 00 01 0d 03 64 6e  73 07 65 78 61 6d 70 6c  |."....dns.exampl|
+          65 00 04 c0 00 02 35 00  00 00 02 00 07 00 01 00  |e.....5.........|
+          03 02 68 32                                       |..h2            |
+OPTION: 162 ( 36) OPTION_V4_DNR
+                  *malformed - bad mandatory keys*
+          00 22 00 01 0d 03 64 6e  73 07 65 78 61 6d 70 6c  |."....dns.exampl|
+          65 00 04 c0 00 02 35 00  00 00 02 00 00 00 01 00  |e.....5.........|
+          03 02 68 32                                       |..h2            |
+OPTION: 162 ( 44) OPTION_V4_DNR
+                  *malformed - bad mandatory keys*
+          00 2a 00 01 0d 03 64 6e  73 07 65 78 61 6d 70 6c  |.*....dns.exampl|
+          65 00 04 c0 00 02 35 00  00 00 04 00 03 00 01 00  |e.....5.........|
+          01 00 03 02 68 32 00 03  00 02 01 bb              |....h2......    |
+OPTION: 162 ( 31) OPTION_V4_DNR
+                  *malformed - address hints not allowed*
+          00 1d 00 01 0d 03 64 6e  73 07 65 78 61 6d 70 6c  |......dns.exampl|
+          65 00 04 c0 00 02 35 00  04 00 04 c0 00 02 01     |e.....5........ |
+OPTION: 162 ( 27) OPTION_V4_DNR
+                  *malformed - bad service parameter value*
+          00 19 00 01 0d 03 64 6e  73 07 65 78 61 6d 70 6c  |......dns.exampl|
+          65 00 04 c0 00 02 35 00  07 00 00                 |e.....5....     |
+OPTION: 162 ( 27) OPTION_V4_DNR
+                  *malformed - bad service parameter value*
+          00 19 00 01 0d 03 64 6e  73 07 65 78 61 6d 70 6c  |......dns.exampl|
+          65 00 04 c0 00 02 35 00  05 00 00                 |e.....5....     |
+OPTION: 162 ( 27) OPTION_V4_DNR
+                  instance 1
+                    priority                1
+                    adn                     dns.example
+                    addrs                   192.0.2.53
+                    key42                   *empty*
+OPTION: 162 ( 31) OPTION_V4_DNR
+                  instance 1
+                    priority                1
+                    adn                     dns.example
+                    addrs                   192.0.2.53
+                    alpn
+          03 61 2c 62                                       |.a,b            |
+OPTION: 162 ( 50) OPTION_V4_DNR
+                  instance 1
+                    priority                1
+                    adn                     dns.example
+                    addrs                   192.0.2.53
+                    ech
+          01 02 03                                          |...             |
+                    dohpath                 /dns-query{?dns}
+--------------------------------------------------------------------------------
+
+  TIME: 2023-11-14 22:13:50.000
+    IP: 0.0.0.0 (00:c0:4f:82:ac:7f) > 255.255.255.255 (ff:ff:ff:ff:ff:ff)
+    OP: 1 (BOOTPREQUEST)
+ HTYPE: 1 (Ethernet)
+  HLEN: 6
+  HOPS: 0
+   XID: 3903f326
+  SECS: 3
+ FLAGS: 8000
+CIADDR: 0.0.0.0
+YIADDR: 0.0.0.0
+SIADDR: 0.0.0.0
+GIADDR: 0.0.0.0
+CHADDR: 00:c0:4f:82:ac:7f:00:00:00:00:00:00:00:00:00:00
+ SNAME:
+ FNAME:
+OPTION:  53 (  1) DHCP message type         5 (DHCPACK)
 OPTION: 162 ( 54) OPTION_V4_DNR
-                  priority                  1
-                  adn                       dns.example
-                  addrs                     192.0.2.53
-                  alpn                      h2
-                  port                      443
-                  priority                  2
-                  adn                       dns.example
+                  instance 1
+                    priority                1
+                    adn                     dns.example
+                    addrs                   192.0.2.53
+                    alpn                    h2
+                    port                    443
+                  instance 2
+                    priority                2
+                    adn                     dns.example
 --------------------------------------------------------------------------------
 

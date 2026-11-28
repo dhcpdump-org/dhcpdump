@@ -227,6 +227,20 @@ static void options(const char *dir) { // {{{ every option code, each with the s
 	pcap_close();
 } // }}}
 
+static void dnr(struct buf *o,const uint8_t *svc,size_t n) { // {{{ option 162 holding one full DNR instance (priority 1, dns.example, 192.0.2.53) with the given SvcParams
+	struct buf t;
+
+	t.n=0;
+	put16(&t,(unsigned)(2+1+13+1+4+n));
+	put16(&t,1);
+	put8(&t,13);
+	put(&t,L("\x03" "dns" "\x07" "example" "\x00"));
+	put8(&t,4);
+	put(&t,L("\xc0\x00\x02\x35"));
+	put(&t,svc,n);
+	opt(o,162,t.d,t.n);
+} // }}}
+
 static void frames(const char *dir) { // {{{ structured options and header/framing special cases
 	static const uint8_t prl[]={1,3,6,15,31,33,43,44,46,47,119,121,249,252,0,255};
 	static const uint8_t chaddr16[16]={0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
@@ -460,6 +474,25 @@ static void frames(const char *dir) { // {{{ structured options and header/frami
 
 	// a microsecond count out of range is folded into the seconds
 	frame(&p,68,67,NULL,0,ip_any,2500000);
+
+	// encrypted DNS service parameters: mandatory valid, naming a missing key, holding
+	// itself, out of order; address hints (not allowed); empty dohpath, ech and unknown
+	// key; an alpn id with a comma; dohpath and ech with values
+	o.n=0;
+	opt(&o,53,L("\x05"));
+	dnr(&o,L("\x00\x00\x00\x04\x00\x01\x00\x03" "\x00\x01\x00\x06\x02" "h2" "\x02" "h3" "\x00\x03\x00\x02\x01\xbb"));
+	dnr(&o,L("\x00\x00\x00\x02\x00\x07" "\x00\x01\x00\x03\x02" "h2"));
+	dnr(&o,L("\x00\x00\x00\x02\x00\x00" "\x00\x01\x00\x03\x02" "h2"));
+	dnr(&o,L("\x00\x00\x00\x04\x00\x03\x00\x01" "\x00\x01\x00\x03\x02" "h2" "\x00\x03\x00\x02\x01\xbb"));
+	dnr(&o,L("\x00\x04\x00\x04\xc0\x00\x02\x01"));
+	dnr(&o,L("\x00\x07\x00\x00"));
+	dnr(&o,L("\x00\x05\x00\x00"));
+	dnr(&o,L("\x00\x2a\x00\x00"));
+	dnr(&o,L("\x00\x01\x00\x04\x03" "a,b"));
+	dnr(&o,L("\x00\x05\x00\x03\x01\x02\x03" "\x00\x07\x00\x10" "/dns-query{?dns}"));
+	put8(&o,255);
+	request(&p,&o);
+	plain(&p);
 
 	// encrypted DNS (RFC 9463): a full instance with alpn and port, then an ADN-only one
 	o.n=0;

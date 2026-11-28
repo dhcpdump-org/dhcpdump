@@ -1,6 +1,5 @@
 // {{{ includes
 
-#include <ctype.h>
 #include <string.h>
 #include <stdint.h>
 
@@ -101,9 +100,9 @@ int dhcp_parse(const uint8_t *data,int data_len,struct dhcp_msg *out) { // {{{ e
 				memcpy(out->hostname,data+j+2,n);
 				out->hostname[n]=0;
 				for (i=0;i<n;i++) { // a crafted hostname may carry terminal escapes, the TUI prints this verbatim
-					unsigned char c=out->hostname[i]; // isprint() is undefined for a negative char
+					unsigned char c=out->hostname[i];
 
-					if (!isprint(c))
+					if (c<0x20||c>0x7e) // printable ascii only; isprint() takes 8 bit bytes as printable in an 8 bit locale, which the TUI sets
 						out->hostname[i]='.';
 				}
 				break;

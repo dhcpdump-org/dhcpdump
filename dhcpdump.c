@@ -1,7 +1,6 @@
 // {{{ includes
 
 #include <time.h>
-#include <ctype.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -24,6 +23,7 @@
 #define SPERM (60)
 
 #define LARGESTRING 1024
+#define DNRIND 2 // extra indent of the items of one DNR instance below its numbered line
 
 #define DHCP_FIXED 236 // fixed BOOTP header length (op..file), the magic cookie follows
 
@@ -152,6 +152,10 @@ static inline void printEpoch32(const uint8_t *data) { // {{{ print the data as 
 		fprintf(g_out," (%s)",b);
 } // }}}
 
+static inline int is_ascii_print(unsigned c) { // {{{ printable ascii, whatever the locale: isprint() takes 8 bit bytes as printable in an 8 bit locale, which the TUI sets
+	return c>=0x20&&c<0x7f;
+} // }}}
+
 static void print_hex_row(const uint8_t *data,int n) { // {{{ one hexdump line without its address column: 16 byte positions as spaced hex in two groups, then the ascii in bars, both space padded so the bars always line up
 	int j;
 
@@ -166,9 +170,7 @@ static void print_hex_row(const uint8_t *data,int n) { // {{{ one hexdump line w
 	fprintf(g_out," %s",g_bar);
 	for (j=0;j<16;j++) {
 		if (j<n) {
-			unsigned char c=data[j]; // isprint() is undefined for a negative char
-
-			fprintf(g_out,"%c",isprint(c)?c:'.');
+			fprintf(g_out,"%c",is_ascii_print(data[j])?data[j]:'.');
 		} else
 			fprintf(g_out," ");
 	}
@@ -188,7 +190,7 @@ static inline int is_printable(const uint8_t *data,int len) { // {{{ true when e
 	int i;
 
 	for (i=0;i<len;i++)
-		if (!isprint(data[i]))
+		if (!is_ascii_print(data[i]))
 			return 0;
 	return 1;
 } // }}}
@@ -301,7 +303,7 @@ static int adn_text(const uint8_t *p,int n,char *b) { // {{{ the dotted form of 
 
 	for (i=0;i<n&&p[i];i+=1+p[i]) { // i<n only for safety, adn_ok has ended the name with its root label
 		for (j=1;j<=p[i];j++) {
-			if (!isprint(p[i+j])||p[i+j]=='.')
+			if (!is_ascii_print(p[i+j])||p[i+j]=='.')
 				return 0;
 			b[k++]=(char)p[i+j];
 		}
@@ -333,6 +335,16 @@ static int alpn_ok(const uint8_t *p,int n,int needprint) { // {{{ a non empty se
 	return 1;
 } // }}}
 
+static int alpn_plain(const uint8_t *p,int n) { // {{{ no id of an alpn_ok list holds a comma or a backslash, which its comma separated presentation form would have to escape
+	int i,j;
+
+	for (i=0;i<n;i+=1+p[i])
+		for (j=1;j<=p[i];j++)
+			if (p[i+j]==','||p[i+j]=='\\')
+				return 0;
+	return 1;
+} // }}}
+
 static int svc_value_ok(unsigned key,const uint8_t *p,int n) { // {{{ the value of a known SvcParamKey has its RFC 9460 wire format; the others are opaque
 	switch (key) {
 		case SVC_MANDATORY:
@@ -344,12 +356,20 @@ static int svc_value_ok(unsigned key,const uint8_t *p,int n) { // {{{ the value 
 			return n==0;
 		case SVC_PORT:
 			return n==2;
-		case SVC_IPV4HINT:
-			return n>0&&n%4==0;
-		case SVC_IPV6HINT:
-			return n>0&&n%16==0;
+		case SVC_ECH: // an ECHConfigList, never empty
+		case SVC_DOHPATH: // a relative URI template (RFC 9461 section 5.1)
+			return n>0;
 	}
 	return 1;
+} // }}}
+
+static int svc_has_key(const uint8_t *p,int n,unsigned key) { // {{{ the svcparams_malformed checked SvcParams in p hold key
+	int i;
+
+	for (i=0;i<n;i+=4+(int)be16(p+i+2))
+		if (be16(p+i)==key)
+			return 1;
+	return 0;
 } // }}}
 
 static const char *svcparams_malformed(const uint8_t *p,int n) { // {{{ why n bytes are not RFC 9460 section 2.2 SvcParams (key, length, value; keys strictly increasing), NULL if they are
@@ -366,9 +386,20 @@ static const char *svcparams_malformed(const uint8_t *p,int n) { // {{{ why n by
 			return "service parameters out of order";
 		if (key==SVC_INVALID)
 			return "invalid service parameter key";
+		if (key==SVC_IPV4HINT||key==SVC_IPV6HINT) // RFC 9463 section 3.1.8: a client discards the whole option
+			return "address hints not allowed";
 		if (!svc_value_ok((unsigned)key,p+i+4,vl))
 			return "bad service parameter value";
 		prev=key;
+	}
+	if (n>0&&be16(p)==SVC_MANDATORY) { // RFC 9460 section 8: strictly increasing keys, never mandatory itself, each one present; keys are increasing, so mandatory can only be the first
+		vl=(int)be16(p+2);
+		for (prev=-1,i=0;i<vl;i+=2) {
+			key=(int)be16(p+4+i);
+			if (key<=prev||key==SVC_MANDATORY||!svc_has_key(p,n,(unsigned)key))
+				return "bad mandatory keys";
+			prev=key;
+		}
 	}
 	return NULL;
 } // }}}
@@ -457,97 +488,95 @@ static inline int opt_is_str(int o) { // {{{ options rendered as text when the v
 	return opt_info[o].type==OT_TEXT;
 } // }}}
 
-static void printSubItem(const char *name,int inl) { // {{{ start a sub-item line under the option header, its name at OPTLISTCOL like a relay agent sub-option; padded out to OPTVALCOL only when inl, i.e. when its value follows on this line
+static void printSubItem(int ind,const char *name,int inl) { // {{{ start a sub-item line under the option header, its name at OPTLISTCOL (plus ind) like a relay agent sub-option; padded out to OPTVALCOL only when inl, i.e. when its value follows on this line
 	if (inl)
-		fprintf(g_out,"\n%*s%-*s",OPTLISTCOL,"",OPTVALCOL-OPTLISTCOL,name);
+		fprintf(g_out,"\n%*s%-*s",OPTLISTCOL+ind,"",OPTVALCOL-OPTLISTCOL-ind,name);
 	else
-		fprintf(g_out,"\n%*s%s",OPTLISTCOL,"",name);
+		fprintf(g_out,"\n%*s%s",OPTLISTCOL+ind,"",name);
 } // }}}
 
-static void printSvcParam(unsigned key,const uint8_t *p,int n) { // {{{ one service parameter of a DNR instance (svcparams_malformed must hold NULL): known keys decoded, one list item per line, the rest as hex+ascii
-	char b[INET6_ADDRSTRLEN],kb[16];
+static void printSvcParam(unsigned key,const uint8_t *p,int n) { // {{{ one service parameter of a DNR instance (svcparams_malformed must hold NULL): known keys decoded, lists in the RFC 9460 presentation form (comma separated), the rest as hex+ascii
+	char kb[16],nb[16],lb[2048]; // lb: at most 127 keys of up to 16 bytes each, or an alpn list no longer than its value
 	const char *name=svc_keyname(key,kb,sizeof kb);
+	size_t l=0;
 	int i;
 
 	switch (key) {
 		default: // ech and unknown keys are opaque
-			printSubItem(name,0);
-			printHexBlock(p,n);
+			if (n==0) {
+				printSubItem(DNRIND,name,1);
+				fprintf(g_out,"*empty*");
+			} else {
+				printSubItem(DNRIND,name,0);
+				printHexBlock(p,n);
+			}
 			break;
 		case SVC_NODEFALPN:
 		case SVC_OHTTP: // no value
-			printSubItem(name,0);
+			printSubItem(DNRIND,name,0);
 			break;
 		case SVC_MANDATORY:
-			printSubItem(name,1);
-			for (i=0;i+2<=n;i+=2) {
-				if (i)
-					fprintf(g_out,"\n%*s",OPTVALCOL,"");
-				fprintf(g_out,"%s",svc_keyname(be16(p+i),kb,sizeof kb));
-			}
+			for (i=0;i+2<=n&&l<sizeof lb;i+=2) // the bound never bites, a value is at most 255 bytes
+				l+=snprintf(lb+l,sizeof lb-l,"%s%s",i?",":"",svc_keyname(be16(p+i),nb,sizeof nb));
+			if (l>=sizeof lb)
+				l=sizeof lb-1;
+			printSubItem(DNRIND,name,1);
+			printWrapped((const uint8_t *)lb,(int)l,OPTVALCOL,OPTVALCOL,OPTWRAPCOL);
 			break;
 		case SVC_ALPN:
-			if (!alpn_ok(p,n,1)) {
-				printSubItem(name,0);
+			if (!alpn_ok(p,n,1)||!alpn_plain(p,n)) {
+				printSubItem(DNRIND,name,0);
 				printHexBlock(p,n);
 				break;
 			}
-			printSubItem(name,1);
 			for (i=0;i<n;i+=1+p[i]) {
 				if (i)
-					fprintf(g_out,"\n%*s",OPTVALCOL,"");
-				printWrapped(p+i+1,p[i],OPTVALCOL,OPTVALCOL,OPTWRAPCOL);
+					lb[l++]=',';
+				memcpy(lb+l,p+i+1,p[i]);
+				l+=p[i];
 			}
+			printSubItem(DNRIND,name,1);
+			printWrapped((const uint8_t *)lb,(int)l,OPTVALCOL,OPTVALCOL,OPTWRAPCOL);
 			break;
 		case SVC_PORT:
-			printSubItem(name,1);
+			printSubItem(DNRIND,name,1);
 			fprintf(g_out,"%u",be16(p));
 			break;
-		case SVC_IPV4HINT:
-			printSubItem(name,1);
-			printList(p,n,4,' ');
-			break;
-		case SVC_IPV6HINT:
-			printSubItem(name,1);
-			for (i=0;i+16<=n;i+=16) {
-				if (i)
-					fprintf(g_out,"\n%*s",OPTVALCOL,"");
-				fprintf(g_out,"%s",inet_ntop(AF_INET6,p+i,b,sizeof b)?b:"?");
-			}
-			break;
 		case SVC_DOHPATH:
-			if (n>0&&is_printable(p,n)) {
-				printSubItem(name,1);
+			if (is_printable(p,n)) {
+				printSubItem(DNRIND,name,1);
 				printWrapped(p,n,OPTVALCOL,OPTVALCOL,OPTWRAPCOL);
 			} else {
-				printSubItem(name,0);
+				printSubItem(DNRIND,name,0);
 				printHexBlock(p,n);
 			}
 			break;
 	}
 } // }}}
 
-static void printDNR(const uint8_t *v,int len) { // {{{ the DNR instances of option 162 (dnr_malformed must hold NULL), each as its priority, ADN, addresses and service parameters on lines of their own
-	char adn[256];
+static void printDNR(const uint8_t *v,int len) { // {{{ the DNR instances of option 162 (dnr_malformed must hold NULL), each a numbered line with its priority, ADN, addresses and service parameters indented below it
+	char adn[256],nb[24];
 	const uint8_t *p;
-	int i,j,n,al,xl,vl;
+	int i,j,n,al,xl,vl,k;
 
-	for (i=0;i<len;i+=2+n) {
+	for (k=1,i=0;i<len;i+=2+n,k++) {
 		n=(int)be16(v+i);
 		al=v[i+4];
-		printSubItem("priority",1);
+		snprintf(nb,sizeof nb,"instance %d",k);
+		printSubItem(0,nb,0);
+		printSubItem(DNRIND,"priority",1);
 		fprintf(g_out,"%u",be16(v+i+2));
 		if (adn_text(v+i+5,al,adn)) {
-			printSubItem("adn",1);
+			printSubItem(DNRIND,"adn",1);
 			printWrapped((const uint8_t *)adn,(int)strlen(adn),OPTVALCOL,OPTVALCOL,OPTWRAPCOL);
 		} else {
-			printSubItem("adn",0);
+			printSubItem(DNRIND,"adn",0);
 			printHexBlock(v+i+5,al);
 		}
 		if (n==3+al) // ADN-only mode
 			continue;
 		xl=v[i+5+al];
-		printSubItem("addrs",1);
+		printSubItem(DNRIND,"addrs",1);
 		printList(v+i+6+al,xl,4,' ');
 		p=v+i+6+al+xl;
 		for (j=0;j<n-4-al-xl;j+=4+vl) {
@@ -885,7 +914,7 @@ void dhcp_hexdump(const uint8_t *buf,int len) { // {{{ full-frame hex dump (the 
 		if (i%16)
 			strcat(hexb," ");
 		sprintf(hexb+strlen(hexb),"%02x",buf[i]);
-		sprintf(ascb+strlen(ascb),"%c",isprint(buf[i])?buf[i]:'.');
+		sprintf(ascb+strlen(ascb),"%c",is_ascii_print(buf[i])?buf[i]:'.');
 		if ((i%16)==15) {
 			printf("%s %s\n",hexb,ascb);
 			hexb[0]=ascb[0]=0;
@@ -1066,18 +1095,17 @@ void dhcp_fprint_payload(FILE *out,const uint8_t *data,int data_len,const char *
 
 static int json_allhex; // -H: every option and relay sub-option also carries its raw bytes as hex
 
-static void json_svcparam(struct jw *w,unsigned key,const uint8_t *p,int n) { // {{{ one service parameter of a DNR instance (svcparams_malformed must hold NULL), decoded like printSvcParam
-	char b[INET6_ADDRSTRLEN];
-	int i;
+static void json_svcparam(struct jw *w,unsigned key,const uint8_t *p,int n) { // {{{ one service parameter of a DNR instance (svcparams_malformed must hold NULL), decoded like printSvcParam; with -H its value also as hex
+	int i,hexed=0;
 
 	jw_obj(w,NULL);
 	jw_uint(w,"key",key);
 	if (key<strcountof(svc_keys))
 		jw_str(w,"name",svc_keys[key]);
 	switch (key) {
-		default: // ech and unknown keys are opaque
-			if (n>0)
-				jw_hex(w,"hex",p,n);
+		default: // ech and unknown keys are opaque; an empty one still says so
+			jw_hex(w,"hex",p,n);
+			hexed=1;
 			break;
 		case SVC_NODEFALPN:
 		case SVC_OHTTP: // no value
@@ -1091,6 +1119,7 @@ static void json_svcparam(struct jw *w,unsigned key,const uint8_t *p,int n) { //
 		case SVC_ALPN:
 			if (!alpn_ok(p,n,1)) {
 				jw_hex(w,"hex",p,n);
+				hexed=1;
 				break;
 			}
 			jw_arr(w,"value");
@@ -1101,26 +1130,17 @@ static void json_svcparam(struct jw *w,unsigned key,const uint8_t *p,int n) { //
 		case SVC_PORT:
 			jw_uint(w,"value",be16(p));
 			break;
-		case SVC_IPV4HINT:
-			jw_arr(w,"value");
-			for (i=0;i+4<=n;i+=4)
-				jw_ip(w,NULL,p+i);
-			jw_end(w);
-			break;
-		case SVC_IPV6HINT:
-			jw_arr(w,"value");
-			for (i=0;i+16<=n;i+=16)
-				if (inet_ntop(AF_INET6,p+i,b,sizeof b))
-					jw_str(w,NULL,b);
-			jw_end(w);
-			break;
 		case SVC_DOHPATH:
-			if (n>0&&is_printable(p,n))
+			if (is_printable(p,n))
 				jw_strn(w,"value",p,n);
-			else if (n>0)
+			else {
 				jw_hex(w,"hex",p,n);
+				hexed=1;
+			}
 			break;
 	}
+	if (json_allhex&&!hexed)
+		jw_hex(w,"hex",p,n);
 	jw_end(w);
 } // }}}
 
