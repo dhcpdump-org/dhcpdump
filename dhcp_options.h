@@ -2,6 +2,8 @@
 // this list was stolen from The DHCP Handbook by Droms and Lemon, Appendix D
 //
 
+#include <stdint.h> // opt_info below
+
 // The first comment is the number, the last parameter is if it's verbosed
 const char *dhcp_options[] = {
 /*   0 */ "pad",
@@ -390,4 +392,124 @@ const char *client_architecture_names[] = {
 const char *auto_configure[] = {
 /*   0 */ "DoNotAutoConfigure",
 /*   1 */ "AutoConfigure",
+};
+
+// Value type of each option code; it drives the option renderers in
+// dhcpdump.c. A code that is not listed is OT_TEXT: shown as text when every
+// byte is printable, as hex otherwise. Supporting a new option means adding
+// its name above and, if it has a structure, one line here.
+enum opt_type {
+	OT_TEXT=0, // printable text, hex otherwise
+	OT_ADDR, // one IPv4 address
+	OT_ADDRS, // list of IPv4 addresses
+	OT_ADDRMASKS, // list of address/mask pairs
+	OT_ROUTES, // list of destination/router pairs
+	OT_U8, // 8 bit number
+	OT_U16, // 16 bit number
+	OT_U16S, // list of 16 bit numbers
+	OT_SECS, // 32 bit count of seconds
+	OT_TIMEOFFSET, // 32 bit seconds, signed (RFC 2132 3.4)
+	OT_ENUM, // 8 bit value with names
+	OT_HEX, // raw bytes
+	OT_PRL, // parameter request list: option codes
+	OT_FQDN, // client FQDN: flags, two rcodes, name
+	OT_RELAY, // relay agent information: sub-options
+	OT_ARCH, // client system architectures: 16 bit types
+	OT_NDI, // client network device interface: type, major, minor
+	OT_CROUTES, // classless static routes (RFC 3442)
+};
+
+struct opt_info {
+	uint8_t type; // enum opt_type
+	const char **names; // OT_ENUM: names of the values
+	unsigned nnames; // entries in names
+};
+
+#define OPT(t) {.type=(t)}
+#define OPT_ENUM(n) {.type=OT_ENUM,.names=(n),.nnames=sizeof (n)/sizeof *(n)}
+
+static const struct opt_info opt_info[256] = {
+[  1] = OPT(OT_ADDR), // Subnet mask
+[  2] = OPT(OT_TIMEOFFSET), // Time offset
+[  3] = OPT(OT_ADDRS), // Router
+[  4] = OPT(OT_ADDRS), // Time server
+[  5] = OPT(OT_ADDRS), // Name server
+[  6] = OPT(OT_ADDRS), // DNS server
+[  7] = OPT(OT_ADDRS), // Log server
+[  8] = OPT(OT_ADDRS), // Cookie server
+[  9] = OPT(OT_ADDRS), // LPR server
+[ 10] = OPT(OT_ADDRS), // Impress server
+[ 11] = OPT(OT_ADDRS), // Resource location server
+[ 13] = OPT(OT_U16), // Boot file size
+[ 16] = OPT(OT_ADDR), // Swap server
+[ 19] = OPT_ENUM(enabledisable), // IP forwarding
+[ 20] = OPT_ENUM(enabledisable), // Non-local source routing
+[ 21] = OPT(OT_ADDRMASKS), // Policy filter
+[ 22] = OPT(OT_U16), // Maximum datagram reassembly size
+[ 23] = OPT(OT_U8), // Default IP TTL
+[ 24] = OPT(OT_SECS), // Path MTU aging timeout
+[ 25] = OPT(OT_U16S), // Path MTU plateau table
+[ 26] = OPT(OT_U16), // Interface MTU
+[ 27] = OPT_ENUM(enabledisable), // All subnets are local
+[ 28] = OPT(OT_ADDR), // Broadcast address
+[ 29] = OPT_ENUM(enabledisable), // Perform mask discovery
+[ 30] = OPT_ENUM(enabledisable), // Mask supplier
+[ 31] = OPT_ENUM(enabledisable), // Perform router discovery
+[ 32] = OPT(OT_ADDR), // Router solicitation address
+[ 33] = OPT(OT_ROUTES), // Static route
+[ 34] = OPT_ENUM(enabledisable), // Trailer encapsulation
+[ 35] = OPT(OT_SECS), // ARP cache timeout
+[ 36] = OPT_ENUM(ethernet_encapsulation), // Ethernet encapsulation
+[ 37] = OPT(OT_U8), // TCP default TTL
+[ 38] = OPT(OT_SECS), // TCP keepalive interval
+[ 39] = OPT_ENUM(enabledisable), // TCP keepalive garbage
+[ 41] = OPT(OT_ADDRS), // NIS servers
+[ 42] = OPT(OT_ADDRS), // NTP servers
+[ 44] = OPT(OT_ADDRS), // NetBIOS name server
+[ 45] = OPT(OT_ADDRS), // NetBIOS datagram distribution server
+[ 46] = OPT_ENUM(netbios_node_type), // NetBIOS node type
+[ 48] = OPT(OT_ADDRS), // X Window font server
+[ 49] = OPT(OT_ADDRS), // X Window display manager
+[ 50] = OPT(OT_ADDR), // Requested IP address
+[ 51] = OPT(OT_SECS), // IP address leasetime
+[ 52] = OPT_ENUM(option_overload), // Option overload
+[ 53] = OPT_ENUM(dhcp_message_types), // DHCP message type
+[ 54] = OPT(OT_ADDR), // Server identifier
+[ 55] = OPT(OT_PRL), // Parameter request list
+[ 57] = OPT(OT_U16), // Maximum DHCP message size
+[ 58] = OPT(OT_SECS), // T1
+[ 59] = OPT(OT_SECS), // T2
+[ 63] = OPT(OT_HEX), // NetWare/IP domain information
+[ 65] = OPT(OT_ADDRS), // NIS+ servers
+[ 68] = OPT(OT_ADDRS), // Mobile IP home agent
+[ 69] = OPT(OT_ADDRS), // SMTP server
+[ 70] = OPT(OT_ADDRS), // POP3 server
+[ 71] = OPT(OT_ADDRS), // NNTP server
+[ 72] = OPT(OT_ADDRS), // WWW server
+[ 73] = OPT(OT_ADDRS), // Finger server
+[ 74] = OPT(OT_ADDRS), // IRC server
+[ 75] = OPT(OT_ADDRS), // StreetTalk server
+[ 76] = OPT(OT_ADDRS), // StreetTalk directory assistance server
+[ 78] = OPT(OT_ADDRS), // Directory agent
+[ 81] = OPT(OT_FQDN), // Client FQDN
+[ 82] = OPT(OT_RELAY), // Relay agent information
+[ 85] = OPT(OT_ADDRS), // NDS server
+[ 91] = OPT(OT_SECS), // Client last transaction time
+[ 92] = OPT(OT_ADDRS), // Associated IP
+[ 93] = OPT(OT_ARCH), // Client system architecture
+[ 94] = OPT(OT_NDI), // Client network device interface
+[108] = OPT(OT_SECS), // IPv6-only preferred
+[116] = OPT_ENUM(auto_configure), // Auto-configure
+[118] = OPT(OT_ADDR), // Subnet selection
+[121] = OPT(OT_CROUTES), // Classless static route
+[145] = OPT(OT_U8), // FORCERENEW_NONCE_CAPABLE
+[148] = OPT(OT_ADDRS), // DOTS address
+[150] = OPT(OT_ADDRS), // TFTP server address
+[152] = OPT(OT_SECS), // base-time
+[153] = OPT(OT_SECS), // start-time-of-state
+[154] = OPT(OT_SECS), // query-start-time
+[155] = OPT(OT_SECS), // query-end-time
+[162] = OPT(OT_ADDRS), // Encrypted DNS server
+[211] = OPT(OT_SECS), // reboot-time
+[249] = OPT(OT_CROUTES), // MSFT classless route
 };

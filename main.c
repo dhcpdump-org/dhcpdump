@@ -53,17 +53,19 @@ regex_t preg; // compiled hmask
 char *dropuser=NULL; // -Z, user to drop privileges to once the capture is open
 int dohexdump=0; // -H, dump whole packet contents for debug
 int tuimode=0; // -t, track sessions in the interactive TUI
+int jsonmode=0; // -j, one JSON object per packet per line
 
 // }}}
 
 static inline int usage(const char *me) { // {{{ printed only on errors: stderr, and make the exit status say error too
 	fprintf(stderr,"dhcpdump "VERSION"\n");
 	fprintf(stderr,"  Usage:\n");
-	fprintf(stderr,"    %s -i <interface> [-h <macaddress>] [-H] [-Z <user>]" TUIOPT "\n",me);
-	fprintf(stderr,"    %s -r <pcapfile>  [-h <macaddress>] [-H] [-Z <user>]" TUIOPT "\n",me);
+	fprintf(stderr,"    %s -i <interface> [-h <macaddress>] [-H] [-j] [-Z <user>]" TUIOPT "\n",me);
+	fprintf(stderr,"    %s -r <pcapfile>  [-h <macaddress>] [-H] [-j] [-Z <user>]" TUIOPT "\n",me);
 	fprintf(stderr,"  Options:\n");
 	fprintf(stderr,"    -h regexp filter by <macaddress>\n");
 	fprintf(stderr,"    -H prints whole packet hex dump\n");
+	fprintf(stderr,"    -j prints one JSON object per DHCP packet per line\n");
 	fprintf(stderr,"    -Z drop privileges to <user> once the capture is open\n");
 #ifndef NO_TUI
 	fprintf(stderr,"    -t track DHCP sessions and their transactions\n");
@@ -150,6 +152,18 @@ static void pcap_callback(uint8_t *user __attribute__((unused)),const struct pca
 	dhcp_print(&f,timestamp);
 } // }}}
 
+static void pcap_callback_json(uint8_t *user __attribute__((unused)),const struct pcap_pkthdr *h,const uint8_t *sp) { // {{{ -j: one JSON line per DHCP packet; with -H the frame rides along as a field so stdout stays pure JSON
+	struct dhcp_frame f;
+
+	if (!dhcp_decap(sp,h->caplen,&f,stderr))
+		return;
+
+	if (hmask&&check_ch(f.payload,f.plen))
+		return;
+
+	dhcp_json_print(stdout,&f,&h->ts,dohexdump?sp:NULL,(int)h->caplen);
+} // }}}
+
 int main(int argc,char **argv) { // {{{
 	struct bpf_program fp;
 	char *interface=NULL;
@@ -165,6 +179,9 @@ int main(int argc,char **argv) { // {{{
 		switch (argv[i][1]) {
 			case 'H':
 				dohexdump=1;
+				break;
+			case 'j':
+				jsonmode=1;
 				break;
 			case 't':
 #ifndef NO_TUI
@@ -203,6 +220,8 @@ int main(int argc,char **argv) { // {{{
 		return usage(argv[0]);
 	if (interface!=NULL&&pcapfile!=NULL)
 		errx(1,"Can not capture from interface \"%s\" and read from file \"%s\" at the same time",interface,pcapfile);
+	if (jsonmode&&tuimode)
+		errx(1,"-j and -t can not be combined");
 
 	if (hmask) {
 		int rc=regcomp(&preg,hmask,REG_EXTENDED|REG_ICASE|REG_NOSUB);
@@ -253,7 +272,7 @@ int main(int argc,char **argv) { // {{{
 			return 1;
 	} else
 #endif
-	if (pcap_loop(cap,0,pcap_callback,NULL)==-1) // offline EOF returns 0, only -1 is an error
+	if (pcap_loop(cap,0,jsonmode?pcap_callback_json:pcap_callback,NULL)==-1) // offline EOF returns 0, only -1 is an error
 		errx(1,"pcap_loop(%s): %s",interface?interface:pcapfile,pcap_geterr(cap));
 
 	pcap_close(cap);
