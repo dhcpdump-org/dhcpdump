@@ -1,0 +1,19 @@
+  TIME: 2023-11-14 22:13:43.000
+    IP: 0.0.0.0 (00:c0:4f:82:ac:7f) > 255.255.255.255 (ff:ff:ff:ff:ff:ff)
+    OP: 1 (BOOTPREQUEST)
+ HTYPE: 1 (Ethernet)
+  HLEN: 20
+  HOPS: 0
+   XID: 3903f326
+  SECS: 3
+ FLAGS: 8000
+CIADDR: 0.0.0.0
+YIADDR: 0.0.0.0
+SIADDR: 0.0.0.0
+GIADDR: 0.0.0.0
+CHADDR: 00:01:02:03:04:05:06:07:08:09:0a:0b:0c:0d:0e:0f
+ SNAME:
+ FNAME:
+OPTION:  53 (  1) DHCP message type         5 (DHCPACK)
+--------------------------------------------------------------------------------
+

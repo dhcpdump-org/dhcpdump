@@ -70,6 +70,11 @@ re:
 	${MAKE} clean
 	${MAKE} -j all
 
+# regression tests; "sh tests/run.sh -u" rewrites the expected
+# output after an intended change, review the diff before committing it
+test: dhcpdump
+	sh tests/run.sh
+
 # static analysis; the analyzer's clang replaces CC, so the objects it leaves
 # behind are not a release build - rerun plain 'make re' afterwards. Only the
 # binary is analysed, dhcpdump.8 is pod2man output and has nothing to check.

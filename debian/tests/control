@@ -1,0 +1,5 @@
+Tests: upstream
+Depends:
+ dhcpdump,
+ gcc | c-compiler,
+ libc6-dev | libc-dev,

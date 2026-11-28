@@ -1,0 +1,4 @@
+#!/bin/sh
+# run the upstream regression tests against the installed binary
+set -e
+DHCPDUMP=/usr/sbin/dhcpdump sh tests/run.sh
