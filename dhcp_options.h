@@ -331,6 +331,33 @@ const char *relayagent_suboptions[] = {
 /*   2 */ "Remote-ID"
 };
 
+// SvcParamKeys (RFC 9460 section 14.3.2, RFC 9461, RFC 9540), used in the
+// service parameters of option 162 (RFC 9463)
+enum svc_key {
+	SVC_MANDATORY=0,
+	SVC_ALPN,
+	SVC_NODEFALPN,
+	SVC_PORT,
+	SVC_IPV4HINT,
+	SVC_ECH,
+	SVC_IPV6HINT,
+	SVC_DOHPATH,
+	SVC_OHTTP,
+	SVC_INVALID=65535, // reserved as the invalid key
+};
+
+const char *svc_keys[] = {
+/*   0 */ "mandatory",
+/*   1 */ "alpn",
+/*   2 */ "no-default-alpn",
+/*   3 */ "port",
+/*   4 */ "ipv4hint",
+/*   5 */ "ech",
+/*   6 */ "ipv6hint",
+/*   7 */ "dohpath",
+/*   8 */ "ohttp"
+};
+
 // Copied from RFC1700
 const char *htypes[] = {
 /*   0 */ "undefined",
@@ -419,6 +446,7 @@ enum opt_type {
 	OT_ARCH, // client system architectures: 16 bit types
 	OT_NDI, // client network device interface: type, major, minor
 	OT_CROUTES, // classless static routes (RFC 3442)
+	OT_DNR, // encrypted DNS (RFC 9463 section 5.1): instances of priority, ADN, addresses and service parameters
 };
 
 struct opt_info {
@@ -511,7 +539,7 @@ static const struct opt_info opt_info[256] = {
 [153] = OPT(OT_SECS), // start-time-of-state
 [154] = OPT(OT_EPOCH), // query-start-time
 [155] = OPT(OT_EPOCH), // query-end-time
-// 162 Encrypted DNS server (RFC 9463) is a series of structured instances, not an address list: left untyped, so shown raw
+[162] = OPT(OT_DNR), // Encrypted DNS server
 [211] = OPT(OT_SECS), // reboot-time
 [249] = OPT(OT_CROUTES), // MSFT classless route
 };

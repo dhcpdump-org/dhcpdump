@@ -248,7 +248,25 @@ requested option; 93: B<value> and B<text> (when known) of each architecture;
 82: one per sub-option with B<code>, B<name> (when known), B<len> and
 B<value> or B<hex>, or B<malformed> when the sub-option does not fit (no
 B<len> when only its code is left, B<hex> with what is left when it is too
-large).
+large); 162 (encrypted DNS, RFC 9463): one per DNR instance with
+B<priority>, B<adn> (the authentication domain name, dotted, without the
+trailing dot and C<.> for the root; B<adn_hex> with its wire format when a label
+is not printable or holds a dot) and, unless the instance is in ADN-only
+mode, B<addrs> (a list of dotted quads) and B<svcparams>.
+
+B<svcparams> lists the service parameters (RFC 9460) of the instance in
+order, each an object with B<key> (the number), B<name> (when known) and its
+value: for mandatory a list of key numbers, for alpn a list of strings (B<hex>
+when an id is not printable), for port a number, for ipv4hint and ipv6hint a
+list of address strings, for dohpath a string (B<hex> when not printable);
+no-default-alpn and ohttp have no value, and ech and unknown keys give
+B<hex>, left out when empty. 162 is malformed when an instance or a service
+parameter does not fit, the name is not uncompressed DNS wire format ended
+by the root label, an instance that is not ADN-only has no address or an
+address length that is not a multiple of 4, the keys are not strictly
+increasing, or a known key has a value of the wrong shape. An instance split
+over several 162 options (RFC 3396) is not joined, so each part is decoded
+on its own.
 
 =back
 

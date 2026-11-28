@@ -15,7 +15,7 @@
 // whatever bytes it is given. A key is passed for members of an object and
 // NULL for array elements (and for the outermost value).
 
-#define JW_MAXDEPTH 8 // deepest nesting the -j schema uses is 5
+#define JW_MAXDEPTH 10 // deepest nesting the -j schema uses is 8 (lists inside option 162 service parameters)
 
 struct jw {
 	FILE *f;

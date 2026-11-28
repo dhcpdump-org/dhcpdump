@@ -119,6 +119,10 @@ static inline void printTimeVal(long long t) { // {{{ print a seconds count raw,
 	fprintf(g_out,")");
 } // }}}
 
+static inline unsigned be16(const uint8_t *p) { // {{{ read 2 network order bytes into a host order value, with no alignment requirement
+	return ((unsigned)p[0]<<8)|p[1];
+} // }}}
+
 static inline uint32_t be32(const uint8_t *p) { // {{{ read 4 network order bytes into a host order value
 	// cast before shifting; p[0]<<24 on its own promotes to int and overflows
 	return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
@@ -279,6 +283,131 @@ static inline void printIPaddressCompactMaskAddress(const uint8_t *data,int len)
 	}
 } // }}}
 
+static int adn_ok(const uint8_t *p,int n) { // {{{ exactly n bytes of one uncompressed DNS wire format name (RFC 8415 section 10): labels of 1 to 63 bytes, the last byte the root label
+	int i=0;
+
+	if (n<1)
+		return 0;
+	while (p[i]) {
+		if (p[i]>63||i+1+p[i]>=n) // >=, so a root label still fits behind this one; over 63 also catches a compression pointer
+			return 0;
+		i+=1+p[i];
+	}
+	return i==n-1;
+} // }}}
+
+static int adn_text(const uint8_t *p,int n,char *b) { // {{{ the dotted form of an adn_ok name into b (n+1 bytes at least), without the trailing dot and "." for the root alone; 0 when a label byte is not printable or is a dot, which the dotted form cannot show
+	int i,j,k=0;
+
+	for (i=0;i<n&&p[i];i+=1+p[i]) { // i<n only for safety, adn_ok has ended the name with its root label
+		for (j=1;j<=p[i];j++) {
+			if (!isprint(p[i+j])||p[i+j]=='.')
+				return 0;
+			b[k++]=(char)p[i+j];
+		}
+		b[k++]='.';
+	}
+	if (k)
+		k--;
+	else
+		b[k++]='.';
+	b[k]=0;
+	return 1;
+} // }}}
+
+static const char *svc_keyname(unsigned key,char *b,size_t bl) { // {{{ the name of a SvcParamKey, keyNNNNN (the RFC 9460 presentation form) for an unknown one
+	if (key<strcountof(svc_keys))
+		return svc_keys[key];
+	snprintf(b,bl,"key%u",key);
+	return b;
+} // }}}
+
+static int alpn_ok(const uint8_t *p,int n,int needprint) { // {{{ a non empty series of non empty length prefixed alpn ids filling exactly n bytes, with needprint also all printable
+	int i;
+
+	if (n<1)
+		return 0;
+	for (i=0;i<n;i+=1+p[i])
+		if (!p[i]||i+1+p[i]>n||(needprint&&!is_printable(p+i+1,p[i])))
+			return 0;
+	return 1;
+} // }}}
+
+static int svc_value_ok(unsigned key,const uint8_t *p,int n) { // {{{ the value of a known SvcParamKey has its RFC 9460 wire format; the others are opaque
+	switch (key) {
+		case SVC_MANDATORY:
+			return n>0&&n%2==0;
+		case SVC_ALPN:
+			return alpn_ok(p,n,0);
+		case SVC_NODEFALPN:
+		case SVC_OHTTP:
+			return n==0;
+		case SVC_PORT:
+			return n==2;
+		case SVC_IPV4HINT:
+			return n>0&&n%4==0;
+		case SVC_IPV6HINT:
+			return n>0&&n%16==0;
+	}
+	return 1;
+} // }}}
+
+static const char *svcparams_malformed(const uint8_t *p,int n) { // {{{ why n bytes are not RFC 9460 section 2.2 SvcParams (key, length, value; keys strictly increasing), NULL if they are
+	int i,key,vl,prev=-1;
+
+	for (i=0;i<n;i+=4+vl) {
+		if (i+4>n)
+			return "truncated service parameter";
+		key=(int)be16(p+i);
+		vl=(int)be16(p+i+2);
+		if (i+4+vl>n)
+			return "service parameter too large";
+		if (key<=prev)
+			return "service parameters out of order";
+		if (key==SVC_INVALID)
+			return "invalid service parameter key";
+		if (!svc_value_ok((unsigned)key,p+i+4,vl))
+			return "bad service parameter value";
+		prev=key;
+	}
+	return NULL;
+} // }}}
+
+static const char *dnr_malformed(const uint8_t *v,int len) { // {{{ why a value is not a series of RFC 9463 section 5.1 DNR instances, NULL if it is; when NULL, every length in it is known to be in bounds
+	const char *why;
+	int i,n,al,xl;
+
+	if (len<1)
+		return "too short";
+	for (i=0;i<len;i+=2+n) {
+		if (i+2>len)
+			return "truncated instance";
+		n=(int)be16(v+i); // instance data length, of what follows it
+		if (i+2+n>len)
+			return "instance too large";
+		if (n<3) // service priority and ADN length are mandatory
+			return "instance too short";
+		al=v[i+4];
+		if (3+al>n)
+			return "ADN too large";
+		if (!adn_ok(v+i+5,al))
+			return "bad ADN";
+		if (n==3+al) // ADN-only mode, no addresses and no service parameters
+			continue;
+		xl=v[i+5+al];
+		if (4+al+xl>n)
+			return "addresses too large";
+		if (!xl) // when present, one address at least (RFC 9463 section 3.1.8)
+			return "no addresses";
+		if (xl%4)
+			return "addresses not a multiple of 4";
+		why=svcparams_malformed(v+i+6+al+xl,n-4-al-xl);
+		if (why)
+			return why;
+	}
+	return NULL;
+} // }}}
+
 static const char *opt_malformed(int type,const uint8_t *v,int len) { // {{{ why a value does not fit its option type, NULL if it does; every renderer decides by this, so they agree on what is malformed
 	switch (type) {
 		case OT_ADDR:
@@ -307,6 +436,8 @@ static const char *opt_malformed(int type,const uint8_t *v,int len) { // {{{ why
 			return len<2?"too short":len%2?"length not a multiple of 2":NULL;
 		case OT_CROUTES:
 			return croutes_ok(v,len)?NULL:"bad route encoding";
+		case OT_DNR:
+			return dnr_malformed(v,len);
 	}
 	return NULL; // text, the parameter request list and relay sub-options take any length
 } // }}}
@@ -316,6 +447,7 @@ static inline int opt_is_inline(int o) { // {{{ options whose value always start
 		case OT_TEXT:
 		case OT_PRL:
 		case OT_RELAY:
+		case OT_DNR:
 			return 0;
 	}
 	return 1;
@@ -323,6 +455,106 @@ static inline int opt_is_inline(int o) { // {{{ options whose value always start
 
 static inline int opt_is_str(int o) { // {{{ options rendered as text when the value is fully printable and as a hex+ascii block below the header otherwise: everything without a structured type
 	return opt_info[o].type==OT_TEXT;
+} // }}}
+
+static void printSubItem(const char *name,int inl) { // {{{ start a sub-item line under the option header, its name at OPTLISTCOL like a relay agent sub-option; padded out to OPTVALCOL only when inl, i.e. when its value follows on this line
+	if (inl)
+		fprintf(g_out,"\n%*s%-*s",OPTLISTCOL,"",OPTVALCOL-OPTLISTCOL,name);
+	else
+		fprintf(g_out,"\n%*s%s",OPTLISTCOL,"",name);
+} // }}}
+
+static void printSvcParam(unsigned key,const uint8_t *p,int n) { // {{{ one service parameter of a DNR instance (svcparams_malformed must hold NULL): known keys decoded, one list item per line, the rest as hex+ascii
+	char b[INET6_ADDRSTRLEN],kb[16];
+	const char *name=svc_keyname(key,kb,sizeof kb);
+	int i;
+
+	switch (key) {
+		default: // ech and unknown keys are opaque
+			printSubItem(name,0);
+			printHexBlock(p,n);
+			break;
+		case SVC_NODEFALPN:
+		case SVC_OHTTP: // no value
+			printSubItem(name,0);
+			break;
+		case SVC_MANDATORY:
+			printSubItem(name,1);
+			for (i=0;i+2<=n;i+=2) {
+				if (i)
+					fprintf(g_out,"\n%*s",OPTVALCOL,"");
+				fprintf(g_out,"%s",svc_keyname(be16(p+i),kb,sizeof kb));
+			}
+			break;
+		case SVC_ALPN:
+			if (!alpn_ok(p,n,1)) {
+				printSubItem(name,0);
+				printHexBlock(p,n);
+				break;
+			}
+			printSubItem(name,1);
+			for (i=0;i<n;i+=1+p[i]) {
+				if (i)
+					fprintf(g_out,"\n%*s",OPTVALCOL,"");
+				printWrapped(p+i+1,p[i],OPTVALCOL,OPTVALCOL,OPTWRAPCOL);
+			}
+			break;
+		case SVC_PORT:
+			printSubItem(name,1);
+			fprintf(g_out,"%u",be16(p));
+			break;
+		case SVC_IPV4HINT:
+			printSubItem(name,1);
+			printList(p,n,4,' ');
+			break;
+		case SVC_IPV6HINT:
+			printSubItem(name,1);
+			for (i=0;i+16<=n;i+=16) {
+				if (i)
+					fprintf(g_out,"\n%*s",OPTVALCOL,"");
+				fprintf(g_out,"%s",inet_ntop(AF_INET6,p+i,b,sizeof b)?b:"?");
+			}
+			break;
+		case SVC_DOHPATH:
+			if (n>0&&is_printable(p,n)) {
+				printSubItem(name,1);
+				printWrapped(p,n,OPTVALCOL,OPTVALCOL,OPTWRAPCOL);
+			} else {
+				printSubItem(name,0);
+				printHexBlock(p,n);
+			}
+			break;
+	}
+} // }}}
+
+static void printDNR(const uint8_t *v,int len) { // {{{ the DNR instances of option 162 (dnr_malformed must hold NULL), each as its priority, ADN, addresses and service parameters on lines of their own
+	char adn[256];
+	const uint8_t *p;
+	int i,j,n,al,xl,vl;
+
+	for (i=0;i<len;i+=2+n) {
+		n=(int)be16(v+i);
+		al=v[i+4];
+		printSubItem("priority",1);
+		fprintf(g_out,"%u",be16(v+i+2));
+		if (adn_text(v+i+5,al,adn)) {
+			printSubItem("adn",1);
+			printWrapped((const uint8_t *)adn,(int)strlen(adn),OPTVALCOL,OPTVALCOL,OPTWRAPCOL);
+		} else {
+			printSubItem("adn",0);
+			printHexBlock(v+i+5,al);
+		}
+		if (n==3+al) // ADN-only mode
+			continue;
+		xl=v[i+5+al];
+		printSubItem("addrs",1);
+		printList(v+i+6+al,xl,4,' ');
+		p=v+i+6+al+xl;
+		for (j=0;j<n-4-al-xl;j+=4+vl) {
+			vl=(int)be16(p+j+2);
+			printSvcParam(be16(p+j),p+j+4,vl);
+		}
+	}
 } // }}}
 
 static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode one TLV option area: the options field past the cookie, or an overloaded sname/file field (RFC 2131 option overload)
@@ -538,6 +770,14 @@ static void print_option_area(const uint8_t *data,int data_len) { // {{{ decode 
 				} else
 					printIPaddressCompactMaskAddress(v,len);
 				break;
+
+			case OT_DNR:
+				if (why) {
+					fprintf(g_out,"\n%*s*malformed - %s*",OPTLISTCOL,"",why);
+					printHexBlock(v,len);
+				} else
+					printDNR(v,len);
+				break;
 		}
 		fprintf(g_out,"\n");
 
@@ -654,10 +894,6 @@ void dhcp_hexdump(const uint8_t *buf,int len) { // {{{ full-frame hex dump (the 
 	if (strlen(ascb)) {
 		printf("%-47s %s\n",hexb,ascb);
 	}
-} // }}}
-
-static inline unsigned be16(const uint8_t *p) { // {{{ read 2 network order bytes into a host order value, with no alignment requirement
-	return ((unsigned)p[0]<<8)|p[1];
 } // }}}
 
 int dhcp_decap(const uint8_t *sp,unsigned caplen,struct dhcp_frame *f,FILE *diag) { // {{{ Ethernet/VLAN/IPv4/UDP -> DHCP payload
@@ -830,6 +1066,98 @@ void dhcp_fprint_payload(FILE *out,const uint8_t *data,int data_len,const char *
 
 static int json_allhex; // -H: every option and relay sub-option also carries its raw bytes as hex
 
+static void json_svcparam(struct jw *w,unsigned key,const uint8_t *p,int n) { // {{{ one service parameter of a DNR instance (svcparams_malformed must hold NULL), decoded like printSvcParam
+	char b[INET6_ADDRSTRLEN];
+	int i;
+
+	jw_obj(w,NULL);
+	jw_uint(w,"key",key);
+	if (key<strcountof(svc_keys))
+		jw_str(w,"name",svc_keys[key]);
+	switch (key) {
+		default: // ech and unknown keys are opaque
+			if (n>0)
+				jw_hex(w,"hex",p,n);
+			break;
+		case SVC_NODEFALPN:
+		case SVC_OHTTP: // no value
+			break;
+		case SVC_MANDATORY:
+			jw_arr(w,"value");
+			for (i=0;i+2<=n;i+=2)
+				jw_uint(w,NULL,be16(p+i));
+			jw_end(w);
+			break;
+		case SVC_ALPN:
+			if (!alpn_ok(p,n,1)) {
+				jw_hex(w,"hex",p,n);
+				break;
+			}
+			jw_arr(w,"value");
+			for (i=0;i<n;i+=1+p[i])
+				jw_strn(w,NULL,p+i+1,p[i]);
+			jw_end(w);
+			break;
+		case SVC_PORT:
+			jw_uint(w,"value",be16(p));
+			break;
+		case SVC_IPV4HINT:
+			jw_arr(w,"value");
+			for (i=0;i+4<=n;i+=4)
+				jw_ip(w,NULL,p+i);
+			jw_end(w);
+			break;
+		case SVC_IPV6HINT:
+			jw_arr(w,"value");
+			for (i=0;i+16<=n;i+=16)
+				if (inet_ntop(AF_INET6,p+i,b,sizeof b))
+					jw_str(w,NULL,b);
+			jw_end(w);
+			break;
+		case SVC_DOHPATH:
+			if (n>0&&is_printable(p,n))
+				jw_strn(w,"value",p,n);
+			else if (n>0)
+				jw_hex(w,"hex",p,n);
+			break;
+	}
+	jw_end(w);
+} // }}}
+
+static void json_dnr(struct jw *w,const uint8_t *v,int len) { // {{{ the DNR instances of option 162 (dnr_malformed must hold NULL) as a list of objects, decoded like printDNR
+	char adn[256];
+	const uint8_t *p;
+	int i,j,n,al,xl,vl;
+
+	jw_arr(w,"value");
+	for (i=0;i<len;i+=2+n) {
+		n=(int)be16(v+i);
+		al=v[i+4];
+		jw_obj(w,NULL);
+		jw_uint(w,"priority",be16(v+i+2));
+		if (adn_text(v+i+5,al,adn))
+			jw_str(w,"adn",adn);
+		else
+			jw_hex(w,"adn_hex",v+i+5,al);
+		if (n>3+al) { // not ADN-only mode
+			xl=v[i+5+al];
+			jw_arr(w,"addrs");
+			for (j=0;j+4<=xl;j+=4)
+				jw_ip(w,NULL,v+i+6+al+j);
+			jw_end(w);
+			p=v+i+6+al+xl;
+			jw_arr(w,"svcparams");
+			for (j=0;j<n-4-al-xl;j+=4+vl) {
+				vl=(int)be16(p+j+2);
+				json_svcparam(w,be16(p+j),p+j+4,vl);
+			}
+			jw_end(w);
+		}
+		jw_end(w);
+	}
+	jw_end(w);
+} // }}}
+
 static void json_value(struct jw *w,int code,const uint8_t *v,int len) { // {{{ the value of one option, typed by opt_info; malformed exactly when the text output says so
 	const struct opt_info *oi=&opt_info[code];
 	const char *why=opt_malformed(oi->type,v,len);
@@ -993,6 +1321,9 @@ static void json_value(struct jw *w,int code,const uint8_t *v,int len) { // {{{ 
 				i+=1+sig+4;
 			}
 			jw_end(w);
+			break;
+		case OT_DNR:
+			json_dnr(w,v,len);
 			break;
 	}
 	if (json_allhex) // the exact bytes behind the decoded value (an over-long value keeps its extra bytes only here)
